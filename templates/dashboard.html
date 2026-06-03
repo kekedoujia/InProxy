@@ -1,0 +1,254 @@
+{{define "dashboard.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>inproxy admin</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; background: #0f172a; color: #e2e8f0; }
+  header { display: flex; justify-content: space-between; align-items: center;
+           padding: 1rem 1.5rem; background: #1e293b; border-bottom: 1px solid #334155; }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header a { color: #94a3b8; text-decoration: none; font-size: .85rem; }
+  nav.tabs { display: flex; gap: .25rem; padding: 0 1.5rem; background: #1e293b;
+             border-bottom: 1px solid #334155; }
+  nav.tabs a { padding: .7rem 1rem; font-size: .85rem; color: #94a3b8; text-decoration: none;
+               border-bottom: 2px solid transparent; }
+  nav.tabs a:hover { color: #e2e8f0; }
+  nav.tabs a.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
+  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  .msg { padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
+  .notice { background: #064e3b; color: #6ee7b7; }
+  .error  { background: #7f1d1d; color: #fca5a5; }
+  .table-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .9rem; }
+  .table-head h2 { font-size: .95rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: .9rem; }
+  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
+  code { background: #1e293b; padding: .15rem .4rem; border-radius: 5px; }
+  .badge { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px; }
+  .on { background: #065f46; color: #6ee7b7; }
+  .off { background: #475569; color: #cbd5e1; }
+  .actions { white-space: nowrap; }
+  .actions > * + * { margin-left: .5rem; }
+  .actions form { display: inline-block; margin: 0; vertical-align: middle; }
+  .actions .btn { vertical-align: middle; }
+  .btn { font-size: .8rem; padding: .35rem .75rem; border-radius: 6px; border: 1px solid #334155;
+         background: #1e293b; color: #e2e8f0; cursor: pointer; text-decoration: none;
+         white-space: nowrap; line-height: 1.4; }
+  .btn:hover { border-color: #475569; }
+  .btn.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+  .btn.del { color: #fca5a5; border-color: #7f1d1d; }
+  .empty { color: #64748b; padding: 1rem 0; }
+
+  /* modal layer */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, .7);
+       display: none; align-items: flex-start; justify-content: center; padding: 4rem 1rem; z-index: 50; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+       width: 100%; max-width: 560px; max-height: 85vh; overflow: auto; }
+  .modal-head { display: flex; align-items: center; gap: .75rem; padding: 1rem 1.25rem;
+       border-bottom: 1px solid #334155; }
+  .modal-head h2 { font-size: 1rem; margin: 0; flex: 1; }
+  .modal-actions { display: flex; gap: .5rem; }
+  .modal-close { background: none; border: 0; color: #94a3b8; font-size: 1.5rem;
+       line-height: 1; cursor: pointer; padding: 0 .25rem; }
+  .modal-body { padding: 1.25rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .grid .full { grid-column: 1 / -1; }
+  label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
+  input[type=text] { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
+          background: #0f172a; color: #e2e8f0; font-size: .95rem; }
+  input:disabled { opacity: .65; cursor: default; }
+  .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
+  .check label { margin: 0; }
+  .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
+  /* mode-driven button visibility */
+  .modal[data-mode="view"] .act-edit { display: none; }
+  .modal[data-mode="edit"] .act-view,
+  .modal[data-mode="add"]  .act-view { display: none; }
+
+  /* phones / narrow screens: stack the table into per-route cards */
+  @media (max-width: 640px) {
+    main { padding: 1rem; }
+    header { padding: .9rem 1rem; }
+    table { font-size: .95rem; }
+    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { border: 1px solid #334155; border-radius: 10px; margin-bottom: 1rem; padding: .35rem .9rem; }
+    td { border: 0; padding: .45rem 0; }
+    td::before { content: attr(data-label); display: block; color: #94a3b8;
+         font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; margin-bottom: .2rem; }
+    td.empty::before { content: none; }
+    .actions { white-space: normal; padding-top: .6rem; }
+    .modal-overlay { padding: 1rem; }
+    .modal-head { flex-wrap: wrap; }
+    .modal-head h2 { flex-basis: 100%; }
+    .grid { grid-template-columns: 1fr; }
+    .check { margin-top: .25rem; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🔀 inproxy admin</h1>
+    <a href="/_admin/logout">Sign out →</a>
+  </header>
+  <nav class="tabs">
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">HTTP service</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">Port forwarding</a>
+  </nav>
+  <main>
+    {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
+    {{if .Error}}<div class="msg error">{{.Error}}</div>{{end}}
+
+    <div class="table-head">
+      <h2>HTTP service</h2>
+      <button class="btn primary" onclick="openAdd()">+ Add route</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Public path</th><th>Backend</th><th>Strip prefix</th><th>Concurrency</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        {{range .Routes}}
+        <tr>
+          <td data-label="Public path"><code>/{{.Prefix}}/</code></td>
+          <td data-label="Backend"><code>{{.Target}}</code></td>
+          <td data-label="Strip prefix">{{if .StripPrefix}}yes{{else}}no{{end}}</td>
+          <td data-label="Concurrency">{{if .MaxConcurrent}}{{.MaxConcurrent}}{{else}}∞{{end}}</td>
+          <td data-label="Status">{{if .Enabled}}<span class="badge on">enabled</span>{{else}}<span class="badge off">disabled</span>{{end}}</td>
+          <td data-label="Notes">{{.Description}}</td>
+          <td data-label="Actions" class="actions">
+            <button class="btn"
+               onclick='openDetail({{.Prefix}}, {{.Target}}, {{.StripPrefix}}, {{.Enabled}}, {{.Description}}, {{.MaxConcurrent}})'>Detail</button>
+            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete /{{.Prefix}}/ ?');">
+              <input type="hidden" name="prefix" value="{{.Prefix}}">
+              <button class="btn del" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="empty">No routes yet. Use “Add route” to create one.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </main>
+
+  <!-- shared modal layer: add / view / edit a route -->
+  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" id="modal-box" data-mode="add">
+      <div class="modal-head">
+        <h2 id="modal-title">Add route</h2>
+        <div class="modal-actions">
+          <button type="button" class="btn act-view" onclick="enterEdit()">Edit</button>
+          <button type="button" class="btn del act-view" onclick="submitDelete()">Delete</button>
+          <button type="submit" form="route-form" class="btn primary act-edit">Save</button>
+          <button type="button" class="btn act-edit" onclick="cancelForm()">Cancel</button>
+        </div>
+        <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form method="post" action="/_admin/save" id="route-form">
+          <input type="hidden" name="old_prefix" id="old_prefix" value="">
+          <div class="grid">
+            <div>
+              <label for="prefix">Public path prefix</label>
+              <input type="text" id="prefix" name="prefix" placeholder="serviceA" required>
+              <div class="hint">Reached at https://&lt;host&gt;/serviceA/...</div>
+            </div>
+            <div>
+              <label for="target">Backend address</label>
+              <input type="text" id="target" name="target" placeholder="http://10.8.0.5:8080" required>
+              <div class="hint">Internal service scheme://host:port</div>
+            </div>
+            <div>
+              <label for="max_concurrent">Max concurrency</label>
+              <input type="text" id="max_concurrent" name="max_concurrent" inputmode="numeric" placeholder="0 = unlimited">
+              <div class="hint">Max simultaneous requests forwarded (0 = unlimited)</div>
+            </div>
+            <div class="check">
+              <input type="checkbox" id="strip_prefix" name="strip_prefix" checked>
+              <label for="strip_prefix">Strip prefix when forwarding (/serviceA/api → /api)</label>
+            </div>
+            <div class="full">
+              <label for="description">Notes (optional)</label>
+              <input type="text" id="description" name="description" placeholder="e.g. Finance system">
+            </div>
+            <div class="check">
+              <input type="checkbox" id="enabled" name="enabled" checked>
+              <label for="enabled">Enabled</label>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- hidden form used by the Delete action inside the modal -->
+  <form method="post" action="/_admin/delete" id="delete-form">
+    <input type="hidden" name="prefix" id="del_prefix">
+  </form>
+
+  <script>
+    const box = document.getElementById('modal-box');
+    const FIELDS = ['prefix', 'target', 'max_concurrent', 'description', 'strip_prefix', 'enabled'];
+    let current = null; // last viewed route, for restoring on Cancel
+
+    function setEditable(on) {
+      FIELDS.forEach(id => { document.getElementById(id).disabled = !on; });
+    }
+    function fill(r) {
+      document.getElementById('old_prefix').value = r.prefix || '';
+      document.getElementById('prefix').value = r.prefix || '';
+      document.getElementById('target').value = r.target || '';
+      document.getElementById('max_concurrent').value = r.maxConc || 0;
+      document.getElementById('description').value = r.desc || '';
+      document.getElementById('strip_prefix').checked = !!r.strip;
+      document.getElementById('enabled').checked = !!r.enabled;
+    }
+    function showModal() { document.getElementById('modal').classList.add('open'); }
+    function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+    function openAdd() {
+      current = null;
+      fill({ strip: true, enabled: true, maxConc: 0 });
+      document.getElementById('modal-title').textContent = 'Add route';
+      box.dataset.mode = 'add';
+      setEditable(true);
+      showModal();
+      document.getElementById('prefix').focus();
+    }
+    function openDetail(prefix, target, strip, enabled, desc, maxConc) {
+      current = { prefix, target, strip, enabled, desc, maxConc };
+      fill(current);
+      document.getElementById('modal-title').textContent = 'Route /' + prefix + '/';
+      box.dataset.mode = 'view';
+      setEditable(false);
+      showModal();
+    }
+    function enterEdit() {
+      document.getElementById('modal-title').textContent = 'Edit route /' + current.prefix + '/';
+      box.dataset.mode = 'edit';
+      setEditable(true);
+    }
+    function cancelForm() {
+      if (box.dataset.mode === 'add' || !current) { closeModal(); return; }
+      fill(current); // discard edits, back to read-only view
+      document.getElementById('modal-title').textContent = 'Route /' + current.prefix + '/';
+      box.dataset.mode = 'view';
+      setEditable(false);
+    }
+    function submitDelete() {
+      if (!current || !confirm('Delete /' + current.prefix + '/ ?')) return;
+      document.getElementById('del_prefix').value = current.prefix;
+      document.getElementById('delete-form').submit();
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+  </script>
+</body>
+</html>{{end}}

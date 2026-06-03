@@ -1,0 +1,6 @@
+# compiled binary (build with `make build`)
+/inproxy
+
+# local TLS material / ACME cache if ever produced in-tree
+*.pem
+/acme/
