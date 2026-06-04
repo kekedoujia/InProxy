@@ -32,6 +32,12 @@ internal user ──────────►│                              
   live in dedicated nat chains (`INPROXY_DNAT` / `INPROXY_POST`) so nothing else is touched;
   an optional per-rule SNAT (masquerade) fixes the return path for VPN/internal targets.
   Requires `CAP_NET_ADMIN` (granted by the systemd unit; the process stays non-root).
+- **Domain routing by SNI** ("Domains" admin page): each domain maps public ports to an
+  internal `ip:port`. Per port choose **terminate** (inproxy ends TLS with an automatic
+  Let's Encrypt cert and reverse-proxies) or **passthrough** (the encrypted stream is
+  forwarded as-is, so the backend serves its own cert — handy for a unified backend cert).
+  Port `:80` is a plaintext HTTP reverse proxy (lets the backend run its own ACME/redirect).
+  A connection that matches no domain falls through to normal handling (HTTP service / tools).
 - Admin edits take effect **immediately**, no restart.
 - WebSocket and streaming responses supported; injects `X-Forwarded-For/Host/Proto/Prefix`.
 
@@ -123,6 +129,7 @@ Changes take effect immediately.
 | `proxy.go`   | reverse proxy construction, prefix stripping, forwarding headers |
 | `forward.go` | runtime TCP port forwarders: reconcile listeners on config change, pipe connections |
 | `dnat.go`    | runtime kernel DNAT: reconcile iptables nat chains on config change (needs CAP_NET_ADMIN) |
+| `domains.go` | SNI peek/route: TLS passthrough splicing + per-port listeners for domain routing |
 | `auth.go`    | IP allowlist + password login + signed session cookie |
 | `admin.go` + `templates/` | admin UI handlers and pages (embedded in the binary) |
 | `deploy/`    | systemd unit, env example, interactive installer |

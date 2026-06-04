@@ -27,16 +27,17 @@
   .table-head h2 { font-size: .95rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
   .lead { color: #64748b; font-size: .82rem; margin: -.4rem 0 1rem; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: .9rem; }
-  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; }
+  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; vertical-align: top; }
   th { color: #94a3b8; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
   code { background: #1e293b; padding: .15rem .4rem; border-radius: 5px; }
-  .badge { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px; }
-  .on { background: #065f46; color: #6ee7b7; }
+  .badge { font-size: .68rem; padding: .1rem .45rem; border-radius: 999px; }
+  .term { background: #1e3a8a; color: #bfdbfe; }
+  .pass { background: #422006; color: #fed7aa; }
   .off { background: #475569; color: #cbd5e1; }
+  .fwd-line { margin: .15rem 0; }
   .actions { white-space: nowrap; }
   .actions > * + * { margin-left: .5rem; }
-  .actions form { display: inline-block; margin: 0; vertical-align: middle; }
-  .actions .btn { vertical-align: middle; }
+  .actions form { display: inline-block; margin: 0; }
   .btn { font-size: .8rem; padding: .35rem .75rem; border-radius: 6px; border: 1px solid #334155;
          background: #1e293b; color: #e2e8f0; cursor: pointer; text-decoration: none;
          white-space: nowrap; line-height: 1.4; }
@@ -49,7 +50,7 @@
        display: none; align-items: flex-start; justify-content: center; padding: 4rem 1rem; z-index: 50; }
   .modal-overlay.open { display: flex; }
   .modal { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-       width: 100%; max-width: 560px; max-height: 85vh; overflow: auto; }
+       width: 100%; max-width: 720px; max-height: 85vh; overflow: auto; }
   .modal-head { display: flex; align-items: center; gap: .75rem; padding: 1rem 1.25rem;
        border-bottom: 1px solid #334155; }
   .modal-head h2 { font-size: 1rem; margin: 0; flex: 1; }
@@ -57,36 +58,24 @@
   .modal-close { background: none; border: 0; color: #94a3b8; font-size: 1.5rem;
        line-height: 1; cursor: pointer; padding: 0 .25rem; }
   .modal-body { padding: 1.25rem; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  .grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
-  input[type=text] { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
-          background: #0f172a; color: #e2e8f0; font-size: .95rem; }
-  input:disabled { opacity: .65; cursor: default; }
-  .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
-  .check label { margin: 0; }
+  input[type=text], select { padding: .5rem .6rem; border-radius: 8px; border: 1px solid #334155;
+          background: #0f172a; color: #e2e8f0; font-size: .9rem; }
+  input:disabled, select:disabled { opacity: .6; cursor: default; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
+  .fwd-head { display: flex; align-items: center; justify-content: space-between; margin: 1.1rem 0 .5rem; }
+  .fwd-head h3 { font-size: .8rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  .frow { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .6rem;
+          border: 1px solid #334155; border-radius: 8px; margin-bottom: .5rem; }
+  .frow .ck { display: flex; align-items: center; gap: .3rem; font-size: .78rem; color: #cbd5e1; }
+  .frow .ck label { margin: 0; }
   .modal[data-mode="view"] .act-edit { display: none; }
   .modal[data-mode="edit"] .act-view,
   .modal[data-mode="add"]  .act-view { display: none; }
 
   @media (max-width: 640px) {
     main { padding: 1rem; }
-    header { padding: .9rem 1rem; }
-    table { font-size: .95rem; }
-    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    table, tbody, tr, td { display: block; width: 100%; }
-    tr { border: 1px solid #334155; border-radius: 10px; margin-bottom: 1rem; padding: .35rem .9rem; }
-    td { border: 0; padding: .45rem 0; }
-    td::before { content: attr(data-label); display: block; color: #94a3b8;
-         font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; margin-bottom: .2rem; }
-    td.empty::before { content: none; }
-    .actions { white-space: normal; padding-top: .6rem; }
-    .modal-overlay { padding: 1rem; }
-    .modal-head { flex-wrap: wrap; }
-    .modal-head h2 { flex-basis: 100%; }
     .grid { grid-template-columns: 1fr; }
-    .check { margin-top: .25rem; }
   }
 </style>
 </head>
@@ -96,10 +85,10 @@
     <a href="/_admin/logout">Sign out →</a>
   </header>
   <nav class="tabs">
-    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">HTTP service</a>
-    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">Port forwarding</a>
-    <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">DNAT</a>
-    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">Domains</a>
+    <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">① DNAT</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">② Domains</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">③ Port forwarding</a>
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">④ HTTP service</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
@@ -109,27 +98,32 @@
       <h2>Domains</h2>
       <button class="btn primary" onclick="openAdd()">+ Add domain</button>
     </div>
-    <p class="lead">Map a whole public hostname to one backend, served at the root path. inproxy
-       terminates HTTPS with an automatic Let's Encrypt certificate (the domain's DNS must point
-       here and ports 80/443 reachable), and reverse-proxies to the backend. Tick <b>Skip backend
-       TLS verify</b> when the internal service uses a self-signed certificate. HTTP is auto-redirected
-       to HTTPS. Changes apply immediately.</p>
+    <p class="lead">Route by TLS SNI: each domain maps public ports to internal <code>ip:port</code>.
+       Per port choose <b>terminate</b> (inproxy ends TLS with an automatic Let's Encrypt cert and
+       reverse-proxies) or <b>passthrough</b> (the encrypted stream is forwarded as-is; the backend
+       serves its own cert). A request that matches no domain falls through to normal handling
+       (HTTP service / tools). HTTP is auto-redirected to HTTPS. Changes apply immediately.</p>
 
     <table>
       <thead>
-        <tr><th>Domain</th><th>Backend</th><th>Skip verify</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th style="width:38%">Domain</th><th>Port forwards</th><th>Notes</th><th>Actions</th></tr>
       </thead>
       <tbody>
-        {{range .VHosts}}
+        {{range .Domains}}
         <tr>
-          <td data-label="Domain"><code>{{.Host}}</code></td>
-          <td data-label="Backend"><code>{{.Target}}</code></td>
-          <td data-label="Skip verify">{{if .SkipVerify}}yes{{else}}no{{end}}</td>
-          <td data-label="Status">{{if .Enabled}}<span class="badge on">enabled</span>{{else}}<span class="badge off">disabled</span>{{end}}</td>
-          <td data-label="Notes">{{.Description}}</td>
-          <td data-label="Actions" class="actions">
-            <button class="btn"
-               onclick='openDetail({{.Host}}, {{.Target}}, {{.SkipVerify}}, {{.Enabled}}, {{.Description}})'>Detail</button>
+          <td><code>{{.Host}}</code></td>
+          <td>
+            {{range .Forwards}}
+            <div class="fwd-line">
+              <code>:{{.Port}}</code> → <code>{{.Target}}</code>
+              {{if .ManageCert}}<span class="badge term">terminate</span>{{else}}<span class="badge pass">passthrough</span>{{end}}
+              {{if not .Enabled}}<span class="badge off">disabled</span>{{end}}
+            </div>
+            {{else}}<span style="color:#64748b">(no ports)</span>{{end}}
+          </td>
+          <td>{{.Description}}</td>
+          <td class="actions">
+            <button class="btn" onclick="openDetail('{{.Host}}')">Detail</button>
             <form method="post" action="/_admin/domains/delete" onsubmit="return confirm('Delete domain {{.Host}} ?');">
               <input type="hidden" name="host" value="{{.Host}}">
               <button class="btn del" type="submit">Delete</button>
@@ -137,13 +131,12 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="empty">No domains yet. Use “Add domain” to create one.</td></tr>
+        <tr><td colspan="4" class="empty">No domains yet. Use “Add domain” to create one.</td></tr>
         {{end}}
       </tbody>
     </table>
   </main>
 
-  <!-- shared modal layer: add / view / edit a domain -->
   <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
@@ -151,79 +144,124 @@
         <div class="modal-actions">
           <button type="button" class="btn act-view" onclick="enterEdit()">Edit</button>
           <button type="button" class="btn del act-view" onclick="submitDelete()">Delete</button>
-          <button type="submit" form="vh-form" class="btn primary act-edit">Save</button>
+          <button type="submit" form="dom-form" class="btn primary act-edit">Save</button>
           <button type="button" class="btn act-edit" onclick="cancelForm()">Cancel</button>
         </div>
         <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <form method="post" action="/_admin/domains/save" id="vh-form">
+        <form method="post" action="/_admin/domains/save" id="dom-form">
           <input type="hidden" name="old_host" id="old_host" value="">
-          <div class="grid">
-            <div class="full">
-              <label for="host">Public domain</label>
-              <input type="text" id="host" name="host" placeholder="aperturemail.aperture-x.com" required>
-              <div class="hint">DNS must point to this host; Let's Encrypt issues the cert on first request</div>
-            </div>
-            <div class="full">
-              <label for="target">Backend address</label>
-              <input type="text" id="target" name="target" placeholder="https://10.8.0.60:18443" required>
-              <div class="hint">Internal service scheme://host:port (use https:// for a TLS backend)</div>
-            </div>
-            <div class="check">
-              <input type="checkbox" id="skip_verify" name="skip_verify" checked>
-              <label for="skip_verify">Skip backend TLS verify (self-signed)</label>
-            </div>
-            <div class="check">
-              <input type="checkbox" id="enabled" name="enabled" checked>
-              <label for="enabled">Enabled</label>
-            </div>
-            <div class="full">
-              <label for="description">Notes (optional)</label>
-              <input type="text" id="description" name="description" placeholder="e.g. Webmail">
-            </div>
+          <input type="hidden" name="forwards_json" id="forwards_json" value="">
+          <div>
+            <label for="host">Public domain</label>
+            <input type="text" id="host" name="host" placeholder="aperturemail.aperture-x.com" style="width:100%" required>
+            <div class="hint">Matched by TLS SNI; for terminate mode DNS must point here</div>
           </div>
+          <div style="margin-top:.8rem">
+            <label for="description">Notes (optional)</label>
+            <input type="text" id="description" name="description" placeholder="e.g. Webmail" style="width:100%">
+          </div>
+
+          <div class="fwd-head">
+            <h3>Port forwards</h3>
+            <button type="button" class="btn" id="add-fwd" onclick="addRow()">+ Add port</button>
+          </div>
+          <div id="fwd-rows"></div>
+          <div class="hint">terminate = inproxy ends TLS + LE cert (set “backend https”/“skip verify” for an https backend);
+             passthrough = forward the TLS stream untouched (backend serves its own cert).</div>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- hidden form used by the Delete action inside the modal -->
   <form method="post" action="/_admin/domains/delete" id="delete-form">
     <input type="hidden" name="host" id="del_host">
   </form>
 
   <script>
+    var DOMAINS = {{.DomainsJSON}};
     const box = document.getElementById('modal-box');
-    const FIELDS = ['host', 'target', 'skip_verify', 'description', 'enabled'];
+    const rows = document.getElementById('fwd-rows');
     let current = null;
 
-    function setEditable(on) {
-      FIELDS.forEach(id => { document.getElementById(id).disabled = !on; });
+    function rowHTML() {
+      return '<div class="frow">'
+        + '<input class="f-port" type="text" placeholder="443" style="width:74px">'
+        + '<input class="f-target" type="text" placeholder="10.8.0.60:18443" style="flex:1;min-width:150px">'
+        + '<select class="f-mode" onchange="syncRow(this)"><option value="terminate">terminate + cert</option><option value="passthrough">passthrough</option></select>'
+        + '<span class="ck f-tls-wrap"><input type="checkbox" class="f-btls"><label>backend https</label></span>'
+        + '<span class="ck f-tls-wrap"><input type="checkbox" class="f-skip"><label>skip verify</label></span>'
+        + '<span class="ck"><input type="checkbox" class="f-en" checked><label>enabled</label></span>'
+        + '<button type="button" class="btn del" onclick="this.closest(\'.frow\').remove()">✕</button>'
+        + '</div>';
     }
-    function fill(v) {
-      document.getElementById('old_host').value = v.host || '';
-      document.getElementById('host').value = v.host || '';
-      document.getElementById('target').value = v.target || '';
-      document.getElementById('skip_verify').checked = !!v.skip;
-      document.getElementById('description').value = v.desc || '';
-      document.getElementById('enabled').checked = !!v.enabled;
+    function syncRow(sel) {
+      const row = sel.closest('.frow');
+      const pass = sel.value === 'passthrough';
+      row.querySelectorAll('.f-tls-wrap').forEach(e => e.style.display = pass ? 'none' : 'flex');
+    }
+    function addRow(f) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = rowHTML();
+      const row = tmp.firstChild;
+      rows.appendChild(row);
+      f = f || {};
+      row.querySelector('.f-port').value = f.port || '';
+      row.querySelector('.f-target').value = f.target || '';
+      row.querySelector('.f-mode').value = (f.manage_cert === false) ? 'passthrough' : 'terminate';
+      row.querySelector('.f-btls').checked = !!f.backend_tls;
+      row.querySelector('.f-skip').checked = !!f.skip_verify;
+      row.querySelector('.f-en').checked = (f.enabled === undefined) ? true : !!f.enabled;
+      syncRow(row.querySelector('.f-mode'));
+      return row;
+    }
+    function collectForwards() {
+      const out = [];
+      rows.querySelectorAll('.frow').forEach(row => {
+        const port = parseInt(row.querySelector('.f-port').value.trim(), 10);
+        const mode = row.querySelector('.f-mode').value;
+        out.push({
+          port: isNaN(port) ? 0 : port,
+          target: row.querySelector('.f-target').value.trim(),
+          manage_cert: mode === 'terminate',
+          backend_tls: row.querySelector('.f-btls').checked,
+          skip_verify: row.querySelector('.f-skip').checked,
+          enabled: row.querySelector('.f-en').checked
+        });
+      });
+      return out;
+    }
+    function setEditable(on) {
+      document.getElementById('host').disabled = !on;
+      document.getElementById('description').disabled = !on;
+      document.getElementById('add-fwd').style.display = on ? '' : 'none';
+      rows.querySelectorAll('input,select,button').forEach(e => { e.disabled = !on; });
+    }
+    function fillDomain(d) {
+      document.getElementById('old_host').value = d ? d.host : '';
+      document.getElementById('host').value = d ? d.host : '';
+      document.getElementById('description').value = d ? (d.description || '') : '';
+      rows.innerHTML = '';
+      const fws = (d && d.forwards) ? d.forwards : [];
+      if (fws.length === 0) addRow({ port: 443 });
+      else fws.forEach(addRow);
     }
     function showModal() { document.getElementById('modal').classList.add('open'); }
     function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
     function openAdd() {
       current = null;
-      fill({ skip: true, enabled: true });
+      fillDomain(null);
       document.getElementById('modal-title').textContent = 'Add domain';
       box.dataset.mode = 'add';
       setEditable(true);
       showModal();
       document.getElementById('host').focus();
     }
-    function openDetail(host, target, skip, enabled, desc) {
-      current = { host, target, skip, enabled, desc };
-      fill(current);
+    function openDetail(host) {
+      current = (DOMAINS || []).find(d => d.host === host) || { host: host, forwards: [] };
+      fillDomain(current);
       document.getElementById('modal-title').textContent = host;
       box.dataset.mode = 'view';
       setEditable(false);
@@ -236,7 +274,7 @@
     }
     function cancelForm() {
       if (box.dataset.mode === 'add' || !current) { closeModal(); return; }
-      fill(current);
+      fillDomain(current);
       document.getElementById('modal-title').textContent = current.host;
       box.dataset.mode = 'view';
       setEditable(false);
@@ -246,6 +284,9 @@
       document.getElementById('del_host').value = current.host;
       document.getElementById('delete-form').submit();
     }
+    document.getElementById('dom-form').addEventListener('submit', function() {
+      document.getElementById('forwards_json').value = JSON.stringify(collectForwards());
+    });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
   </script>
 </body>

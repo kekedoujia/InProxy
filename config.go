@@ -51,22 +51,33 @@ type DNATRule struct {
 	Enabled     bool   `json:"enabled"`     // whether the rule is active
 }
 
-// VHost maps a whole public hostname to one backend, served at the root path.
-// TLS is terminated at inproxy (Let's Encrypt cert for Host in "auto" mode) and
-// the request is reverse-proxied to Target; SkipVerify allows a self-signed
-// internal backend over https.
-type VHost struct {
-	Host        string `json:"host"`        // public FQDN, e.g. "aperturemail.aperture-x.com"
-	Target      string `json:"target"`      // backend, e.g. "https://10.8.0.60:18443"
-	SkipVerify  bool   `json:"skip_verify"` // don't verify the backend's TLS cert (self-signed internal service)
-	Description string `json:"description"` // notes
-	Enabled     bool   `json:"enabled"`     // whether the vhost is active
+// PortForward is one public-port mapping under a Domain. When ManageCert is true,
+// inproxy terminates TLS on Port with an automatic Let's Encrypt certificate and
+// reverse-proxies to the backend; when false, inproxy passes the TLS connection
+// through to the backend untouched (the backend presents its own certificate).
+type PortForward struct {
+	Port       int  `json:"port"`        // public port, e.g. 443
+	Target     string `json:"target"`    // internal "ip:port", e.g. "10.8.0.60:18443"
+	ManageCert bool `json:"manage_cert"` // true: terminate + Let's Encrypt; false: TLS passthrough
+	BackendTLS bool `json:"backend_tls"` // terminate mode: backend speaks https (else http)
+	SkipVerify bool `json:"skip_verify"` // terminate + backend_tls: skip backend cert verification
+	Enabled    bool `json:"enabled"`     // whether this mapping is active
 }
 
-// compiledVHost is a runtime vhost with its prebuilt reverse proxy.
-type compiledVHost struct {
-	VHost
-	proxy *httputil.ReverseProxy
+// Domain is one public hostname (matched by TLS SNI) with a set of per-port
+// forwards under it.
+type Domain struct {
+	Host        string        `json:"host"`        // public FQDN, e.g. "aperturemail.aperture-x.com"
+	Description string        `json:"description"` // notes
+	Forwards    []PortForward `json:"forwards"`    // one per public port
+}
+
+// compiledPF is a runtime port-forward: the rule plus, for terminate mode, a
+// prebuilt reverse proxy.
+type compiledPF struct {
+	Host string
+	PortForward
+	proxy *httputil.ReverseProxy // non-nil only in terminate (ManageCert) mode
 }
 
 // configFile is the on-disk shape. The first release stored a bare JSON array of
@@ -75,7 +86,7 @@ type configFile struct {
 	Routes   []Route    `json:"routes"`
 	Forwards []Forward  `json:"forwards"`
 	DNAT     []DNATRule `json:"dnat"`
-	VHosts   []VHost    `json:"vhosts"`
+	Domains  []Domain   `json:"domains"`
 }
 
 // compiledRoute is a runtime route with its prebuilt reverse proxy.
@@ -93,16 +104,17 @@ var reserved = map[string]bool{"_admin": true, "_healthz": true}
 
 // Store holds all routes in a thread-safe way and persists them to a JSON file.
 type Store struct {
-	mu         sync.RWMutex
-	path       string
-	routes     []Route
-	forwards   []Forward
-	dnat       []DNATRule
-	vhosts     []VHost
-	compiled   []compiledRoute           // sorted by prefix length descending for longest-match
-	compiledVH map[string]*compiledVHost // by lower-cased host
-	onForward  func(forwards []Forward)  // notified after forwards change (set by main)
-	onDNAT     func(rules []DNATRule)    // notified after DNAT rules change (set by main)
+	mu          sync.RWMutex
+	path        string
+	routes      []Route
+	forwards    []Forward
+	dnat        []DNATRule
+	domains     []Domain
+	compiled    []compiledRoute                // routes, longest prefix first
+	compiledDom map[int]map[string]*compiledPF // port -> lower-cased host -> rule
+	onForward   func(forwards []Forward)       // notified after forwards change (set by main)
+	onDNAT      func(rules []DNATRule)         // notified after DNAT rules change (set by main)
+	onDomain    func()                         // notified after domains change (set by main)
 }
 
 // NewStore loads the config from disk (creating an empty one if missing).
@@ -113,18 +125,18 @@ func NewStore(path string) (*Store, error) {
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		s.routes, s.forwards, s.dnat, s.vhosts = []Route{}, []Forward{}, []DNATRule{}, []VHost{}
+		s.routes, s.forwards, s.dnat, s.domains = []Route{}, []Forward{}, []DNATRule{}, []Domain{}
 		if err := s.persistLocked(); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	} else if len(data) > 0 {
-		routes, forwards, dnat, vhosts, err := parseConfig(data)
+		routes, forwards, dnat, domains, err := parseConfig(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", path, err)
 		}
-		s.routes, s.forwards, s.dnat, s.vhosts = routes, forwards, dnat, vhosts
+		s.routes, s.forwards, s.dnat, s.domains = routes, forwards, dnat, domains
 	}
 	if err := s.recompileLocked(); err != nil {
 		return nil, err
@@ -132,20 +144,54 @@ func NewStore(path string) (*Store, error) {
 	return s, nil
 }
 
-// parseConfig accepts both the current object form {routes,forwards} and the
-// original bare-array-of-routes form, migrating the latter transparently.
-func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []VHost, error) {
+// parseConfig accepts the object form, the original bare-array-of-routes form,
+// and the intermediate form that had a flat "vhosts" list (migrated into the
+// nested "domains" model: each old vhost becomes a domain with one 443 forward).
+func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []Domain, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if strings.HasPrefix(trimmed, "[") { // legacy: bare array of routes
 		var routes []Route
 		if err := json.Unmarshal(data, &routes); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		return routes, []Forward{}, []DNATRule{}, []VHost{}, nil
+		return routes, []Forward{}, []DNATRule{}, []Domain{}, nil
 	}
-	var cf configFile
+	var cf struct {
+		Routes   []Route    `json:"routes"`
+		Forwards []Forward  `json:"forwards"`
+		DNAT     []DNATRule `json:"dnat"`
+		Domains  []Domain   `json:"domains"`
+		VHosts   []struct {
+			Host        string `json:"host"`
+			Target      string `json:"target"`
+			SkipVerify  bool   `json:"skip_verify"`
+			Description string `json:"description"`
+			Enabled     bool   `json:"enabled"`
+		} `json:"vhosts"`
+	}
 	if err := json.Unmarshal(data, &cf); err != nil {
 		return nil, nil, nil, nil, err
+	}
+	domains := cf.Domains
+	if domains == nil {
+		domains = []Domain{}
+	}
+	for _, v := range cf.VHosts { // migrate legacy flat vhosts -> nested domains
+		host, port := v.Target, "443"
+		https := false
+		if u, err := url.Parse(v.Target); err == nil && u.Host != "" {
+			host = u.Host
+			https = u.Scheme == "https"
+		}
+		domains = append(domains, Domain{
+			Host:        v.Host,
+			Description: v.Description,
+			Forwards: []PortForward{{
+				Port: 443, Target: host, ManageCert: true,
+				BackendTLS: https, SkipVerify: v.SkipVerify, Enabled: v.Enabled,
+			}},
+		})
+		_ = port
 	}
 	if cf.Routes == nil {
 		cf.Routes = []Route{}
@@ -156,10 +202,7 @@ func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []VHost, error) {
 	if cf.DNAT == nil {
 		cf.DNAT = []DNATRule{}
 	}
-	if cf.VHosts == nil {
-		cf.VHosts = []VHost{}
-	}
-	return cf.Routes, cf.Forwards, cf.DNAT, cf.VHosts, nil
+	return cf.Routes, cf.Forwards, cf.DNAT, domains, nil
 }
 
 // SetDNATListener registers a callback invoked (outside the lock) whenever the
@@ -167,6 +210,14 @@ func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []VHost, error) {
 func (s *Store) SetDNATListener(fn func([]DNATRule)) {
 	s.mu.Lock()
 	s.onDNAT = fn
+	s.mu.Unlock()
+}
+
+// SetDomainListener registers a callback invoked (outside the lock) whenever the
+// set of domains changes, so the runtime router can reconcile its listeners.
+func (s *Store) SetDomainListener(fn func()) {
+	s.mu.Lock()
+	s.onDomain = fn
 	s.mu.Unlock()
 }
 
@@ -313,39 +364,80 @@ func (s *Store) recompileLocked() error {
 	})
 	s.compiled = compiled
 
-	vh := make(map[string]*compiledVHost)
-	for _, v := range s.vhosts {
-		if !v.Enabled {
-			continue
+	dom := make(map[int]map[string]*compiledPF)
+	for _, d := range s.domains {
+		for _, f := range d.Forwards {
+			if !f.Enabled {
+				continue
+			}
+			cp := &compiledPF{Host: d.Host, PortForward: f}
+			switch {
+			case f.Port == 80:
+				// :80 is plaintext HTTP — always a reverse proxy to the backend (http)
+				p, err := buildTerminateProxy(d.Host, PortForward{Target: f.Target})
+				if err != nil {
+					return fmt.Errorf("domain %q port 80: %w", d.Host, err)
+				}
+				cp.proxy = p
+			case f.ManageCert:
+				p, err := buildTerminateProxy(d.Host, f)
+				if err != nil {
+					return fmt.Errorf("domain %q port %d: %w", d.Host, f.Port, err)
+				}
+				cp.proxy = p
+			}
+			if dom[f.Port] == nil {
+				dom[f.Port] = make(map[string]*compiledPF)
+			}
+			dom[f.Port][strings.ToLower(d.Host)] = cp
 		}
-		p, err := buildVHostProxy(v)
-		if err != nil {
-			return fmt.Errorf("vhost %q: %w", v.Host, err)
-		}
-		cv := compiledVHost{VHost: v, proxy: p}
-		vh[strings.ToLower(v.Host)] = &cv
 	}
-	s.compiledVH = vh
+	s.compiledDom = dom
 	return nil
 }
 
-// MatchVHost returns the enabled vhost serving host (case-insensitive), if any.
-func (s *Store) MatchVHost(host string) (*compiledVHost, bool) {
+// MatchDomain returns the enabled forward for (host, port), case-insensitive.
+func (s *Store) MatchDomain(host string, port int) (*compiledPF, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cv, ok := s.compiledVH[strings.ToLower(host)]
-	return cv, ok
+	m := s.compiledDom[port]
+	if m == nil {
+		return nil, false
+	}
+	cp, ok := m[strings.ToLower(host)]
+	return cp, ok
 }
 
-// HasVHost reports whether an enabled vhost is configured for host. Used by the
-// ACME host policy to decide which names to obtain certificates for.
-func (s *Store) HasVHost(host string) bool {
-	_, ok := s.MatchVHost(host)
-	return ok
+// IsTerminateHost reports whether host has an enabled terminate (manage-cert)
+// forward on any port. Used by the ACME host policy to decide which names to
+// obtain certificates for (passthrough hosts are excluded — the backend owns them).
+func (s *Store) IsTerminateHost(host string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h := strings.ToLower(host)
+	for _, m := range s.compiledDom {
+		if cp, ok := m[h]; ok && cp.ManageCert {
+			return true
+		}
+	}
+	return false
+}
+
+// DomainPorts returns every distinct enabled public port. The caller skips the
+// main proxy port (which already has a listener) and opens the rest.
+func (s *Store) DomainPorts() []int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ports []int
+	for p := range s.compiledDom {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 func (s *Store) persistLocked() error {
-	routes, forwards, dnat, vhosts := s.routes, s.forwards, s.dnat, s.vhosts
+	routes, forwards, dnat, domains := s.routes, s.forwards, s.dnat, s.domains
 	if routes == nil {
 		routes = []Route{}
 	}
@@ -355,10 +447,10 @@ func (s *Store) persistLocked() error {
 	if dnat == nil {
 		dnat = []DNATRule{}
 	}
-	if vhosts == nil {
-		vhosts = []VHost{}
+	if domains == nil {
+		domains = []Domain{}
 	}
-	data, err := json.MarshalIndent(configFile{Routes: routes, Forwards: forwards, DNAT: dnat, VHosts: vhosts}, "", "  ")
+	data, err := json.MarshalIndent(configFile{Routes: routes, Forwards: forwards, DNAT: dnat, Domains: domains}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -592,95 +684,138 @@ func validateDNAT(d *DNATRule) error {
 	return nil
 }
 
-// ---------- VHosts (host-based reverse proxy) ----------
+// ---------- Domains (SNI-routed, per-port terminate or passthrough) ----------
 
 // hostPattern matches a plausible FQDN (at least one dot).
 var hostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$`)
 
-// ListVHosts returns a copy of the configured vhosts.
-func (s *Store) ListVHosts() []VHost {
+// ListDomains returns a copy of the configured domains.
+func (s *Store) ListDomains() []Domain {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]VHost, len(s.vhosts))
-	copy(out, s.vhosts)
+	out := make([]Domain, len(s.domains))
+	copy(out, s.domains)
 	return out
 }
 
-// UpsertVHost adds or updates a vhost (unique by host). Empty oldHost = add.
-func (s *Store) UpsertVHost(oldHost string, v VHost) error {
-	if err := validateVHost(&v); err != nil {
+// UpsertDomain adds or updates a domain and all its forwards (unique by host).
+// Empty oldHost = add.
+func (s *Store) UpsertDomain(oldHost string, d Domain) error {
+	if err := validateDomain(&d); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	idx := -1
-	for i, e := range s.vhosts {
-		if strings.EqualFold(e.Host, v.Host) {
+	for i, e := range s.domains {
+		if strings.EqualFold(e.Host, d.Host) {
 			idx = i
 		}
 	}
 	if oldHost == "" { // add
 		if idx >= 0 {
-			return fmt.Errorf("host %q already exists", v.Host)
+			s.mu.Unlock()
+			return fmt.Errorf("domain %q already exists", d.Host)
 		}
-		s.vhosts = append(s.vhosts, v)
+		s.domains = append(s.domains, d)
 	} else { // update
-		if !strings.EqualFold(oldHost, v.Host) && idx >= 0 {
-			return fmt.Errorf("host %q already exists", v.Host)
+		if !strings.EqualFold(oldHost, d.Host) && idx >= 0 {
+			s.mu.Unlock()
+			return fmt.Errorf("domain %q already exists", d.Host)
 		}
 		found := false
-		for i := range s.vhosts {
-			if strings.EqualFold(s.vhosts[i].Host, oldHost) {
-				s.vhosts[i] = v
+		for i := range s.domains {
+			if strings.EqualFold(s.domains[i].Host, oldHost) {
+				s.domains[i] = d
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("host %q to update does not exist", oldHost)
+			s.mu.Unlock()
+			return fmt.Errorf("domain %q to update does not exist", oldHost)
 		}
 	}
-	return s.commitLocked()
+	if err := s.commitLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+	s.fireDomain()
+	return nil
 }
 
-// DeleteVHost removes a vhost by host.
-func (s *Store) DeleteVHost(host string) error {
+// DeleteDomain removes a domain (and all its forwards) by host.
+func (s *Store) DeleteDomain(host string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.vhosts[:0]
+	out := s.domains[:0]
 	removed := false
-	for _, v := range s.vhosts {
-		if strings.EqualFold(v.Host, host) {
+	for _, d := range s.domains {
+		if strings.EqualFold(d.Host, host) {
 			removed = true
 			continue
 		}
-		out = append(out, v)
+		out = append(out, d)
 	}
 	if !removed {
-		return fmt.Errorf("host %q does not exist", host)
+		s.mu.Unlock()
+		return fmt.Errorf("domain %q does not exist", host)
 	}
-	s.vhosts = out
-	return s.commitLocked()
+	s.domains = out
+	if err := s.commitLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+	s.fireDomain()
+	return nil
 }
 
-// validateVHost checks and normalizes a vhost in place.
-func validateVHost(v *VHost) error {
-	v.Host = strings.TrimSpace(strings.ToLower(v.Host))
-	if !hostPattern.MatchString(v.Host) {
+func (s *Store) fireDomain() {
+	s.mu.RLock()
+	fn := s.onDomain
+	s.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// validateDomain checks and normalizes a domain and its forwards in place.
+func validateDomain(d *Domain) error {
+	d.Host = strings.TrimSpace(strings.ToLower(d.Host))
+	if !hostPattern.MatchString(d.Host) {
 		return errors.New("host must be a valid domain name, e.g. mail.example.com")
 	}
-	u, err := url.Parse(strings.TrimSpace(v.Target))
-	if err != nil {
-		return fmt.Errorf("invalid backend address: %w", err)
+	d.Description = strings.TrimSpace(d.Description)
+	if len(d.Forwards) == 0 {
+		return errors.New("add at least one port forward")
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("backend address must start with http:// or https://")
+	seen := map[int]bool{}
+	for i := range d.Forwards {
+		f := &d.Forwards[i]
+		if f.Port < 1 || f.Port > 65535 {
+			return fmt.Errorf("public port must be between 1 and 65535 (got %d)", f.Port)
+		}
+		if f.Port == 80 {
+			// :80 is always a plaintext HTTP reverse proxy; TLS settings don't apply
+			f.ManageCert = false
+			f.BackendTLS = false
+			f.SkipVerify = false
+		}
+		if seen[f.Port] {
+			return fmt.Errorf("duplicate public port %d for this domain", f.Port)
+		}
+		seen[f.Port] = true
+		target, err := normalizeHostPort(strings.TrimSpace(f.Target), false)
+		if err != nil {
+			return fmt.Errorf("port %d target: %w", f.Port, err)
+		}
+		f.Target = target
+		if !f.ManageCert {
+			// passthrough: backend TLS settings are irrelevant
+			f.BackendTLS = false
+			f.SkipVerify = false
+		}
 	}
-	if u.Host == "" {
-		return errors.New("backend address is missing host/port")
-	}
-	v.Target = u.String()
-	v.Description = strings.TrimSpace(v.Description)
 	return nil
 }
 

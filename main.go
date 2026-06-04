@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -66,17 +67,24 @@ func main() {
 
 	admin := NewAdmin(store, auth, forwarder, dnat)
 
-	// External proxy handler: only forwards business routes + health check,
-	// never exposes the admin UI.
+	// the main HTTPS listener's public port (used to match domain forwards on it)
+	_, httpsPort, _ := net.SplitHostPort(proxyAddr)
+	mainPort := 443
+	if p, e := strconv.Atoi(httpsPort); e == nil && p != 0 {
+		mainPort = p
+	}
+
+	// External proxy handler: terminate-mode domains and path routes (the admin UI
+	// is never exposed). Passthrough domains are diverted earlier at the TLS layer.
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_healthz" {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("ok"))
 			return
 		}
-		// host-based routing wins: a whole hostname mapped to one backend
-		if vh, ok := store.MatchVHost(hostOnly(r.Host)); ok {
-			vh.serve(w, r)
+		// a whole hostname mapped to one backend (terminate mode) wins over path routes
+		if cp, ok := store.MatchDomain(hostOnly(r.Host), mainPort); ok && cp.ManageCert {
+			cp.serve(w, r)
 			return
 		}
 		if c, ok := store.Match(r.URL.Path); ok {
@@ -87,11 +95,9 @@ func main() {
 	})
 
 	// Configure external HTTPS: pick the cert source by TLS_MODE.
-	_, httpsPort, _ := net.SplitHostPort(proxyAddr)
 	var (
-		proxyTLS    *tls.Config  // provided by autocert in "auto" mode
-		useCertFile bool         // self/file mode: use cert files on disk
-		redirectH   http.Handler = redirectToHTTPS(httpsPort)
+		proxyTLSConf *tls.Config  // TLS config for the :443 listener (autocert or file-based)
+		redirectH    http.Handler = redirectToHTTPS(httpsPort)
 	)
 	switch tlsMode {
 	case "auto":
@@ -100,10 +106,11 @@ func main() {
 		}
 		m := &autocert.Manager{
 			Prompt: autocert.AcceptTOS,
-			// allow the main host plus any configured vhost, so Let's Encrypt
-			// issues certs for vhosts (e.g. mail.example.com) on first request
+			// allow the main host plus any terminate-mode domain, so Let's Encrypt
+			// issues certs for them on first request. Passthrough domains are
+			// excluded — the backend owns their cert.
 			HostPolicy: func(_ context.Context, host string) error {
-				if strings.EqualFold(host, externalHost) || store.HasVHost(host) {
+				if strings.EqualFold(host, externalHost) || store.IsTerminateHost(host) {
 					return nil
 				}
 				return fmt.Errorf("acme: host %q is not configured", host)
@@ -111,25 +118,41 @@ func main() {
 			Cache: autocert.DirCache(acmeCache),
 			Email: acmeEmail,
 		}
-		proxyTLS = m.TLSConfig()
+		proxyTLSConf = m.TLSConfig()
 		// :80 serves the ACME http-01 challenge and redirects everything else to HTTPS
 		redirectH = m.HTTPHandler(redirectToHTTPS(httpsPort))
 		log.Printf("TLS mode: Let's Encrypt automatic certificates (domain %s)", externalHost)
-	case "self":
-		if err := ensureTLS(certPath, keyPath, []string{"127.0.0.1", "::1", externalHost}); err != nil {
-			log.Fatalf("failed to generate self-signed certificate: %v", err)
-		}
-		useCertFile = true
-		log.Printf("TLS mode: self-signed certificate %s", certPath)
-	case "file":
-		if !fileExists(certPath) || !fileExists(keyPath) {
+	case "self", "file":
+		if tlsMode == "self" {
+			if err := ensureTLS(certPath, keyPath, []string{"127.0.0.1", "::1", externalHost}); err != nil {
+				log.Fatalf("failed to generate self-signed certificate: %v", err)
+			}
+		} else if !fileExists(certPath) || !fileExists(keyPath) {
 			log.Fatalf("TLS_MODE=file requires both TLS_CERT(%s) and TLS_KEY(%s) to exist", certPath, keyPath)
 		}
-		useCertFile = true
-		log.Printf("TLS mode: using provided certificate %s", certPath)
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			log.Fatalf("failed to load certificate %s: %v", certPath, err)
+		}
+		proxyTLSConf = &tls.Config{Certificates: []tls.Certificate{cert}}
+		log.Printf("TLS mode: %s certificate %s", tlsMode, certPath)
 	default:
 		log.Fatalf("unknown TLS_MODE=%q (choose auto|self|file)", tlsMode)
 	}
+
+	// Domain router: passthrough/terminate by SNI. The main :443 listener is wrapped
+	// below; extra ports get their own listeners, reconciled on config change.
+	redirectPort := 80
+	if redirectAddr != "" {
+		if _, rp, e := net.SplitHostPort(redirectAddr); e == nil {
+			if n, e2 := strconv.Atoi(rp); e2 == nil && n != 0 {
+				redirectPort = n
+			}
+		}
+	}
+	domainRouter := NewDomainRouter(store, proxyTLSConf, mainPort, redirectPort)
+	store.SetDomainListener(domainRouter.Apply)
+	domainRouter.Apply()
 
 	var servers []*http.Server
 	var wg sync.WaitGroup
@@ -145,13 +168,22 @@ func main() {
 		}()
 	}
 
-	// 1) External HTTPS proxy
-	proxySrv := &http.Server{Addr: proxyAddr, Handler: proxyHandler, TLSConfig: proxyTLS, ReadHeaderTimeout: 15 * time.Second}
-	run("external HTTPS proxy", proxySrv, func() error {
-		if useCertFile {
-			return proxySrv.ListenAndServeTLS(certPath, keyPath)
+	// 1) External HTTPS proxy. The raw :443 listener is wrapped so passthrough
+	//    domains are spliced to their backend before TLS; everything else
+	//    (terminate domains, tools path routes, ACME) is TLS-terminated here.
+	rawProxyLn, err := net.Listen("tcp", proxyAddr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", proxyAddr, err)
+	}
+	proxySNI := newSNIListener(rawProxyLn, func(host string) sniDecision {
+		if cp, ok := store.MatchDomain(host, mainPort); ok && !cp.ManageCert {
+			return sniDecision{action: actPassthrough, target: cp.Target}
 		}
-		return proxySrv.ListenAndServeTLS("", "") // cert supplied dynamically by autocert
+		return sniDecision{action: actAccept} // terminate domains / tools / ACME fall through
+	})
+	proxySrv := &http.Server{Addr: proxyAddr, Handler: proxyHandler, ReadHeaderTimeout: 15 * time.Second}
+	run("external HTTPS proxy", proxySrv, func() error {
+		return proxySrv.Serve(tls.NewListener(proxySNI, proxyTLSConf))
 	})
 
 	// 2) Internal admin UI (dedicated port, bound to the internal IP at install time;
@@ -165,9 +197,18 @@ func main() {
 		return adminSrv.ListenAndServe()
 	})
 
-	// 3) :80 — HTTP->HTTPS redirect (also handles ACME challenges in auto mode)
+	// 3) :80 — domain :80 forwards reverse-proxy to their backend (plaintext HTTP);
+	//    everything else is the HTTP->HTTPS redirect + ACME challenges.
 	if redirectAddr != "" {
-		redSrv := &http.Server{Addr: redirectAddr, Handler: redirectH, ReadHeaderTimeout: 15 * time.Second}
+		base80 := redirectH
+		h80 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if cp, ok := store.MatchDomain(hostOnly(r.Host), redirectPort); ok && cp.proxy != nil {
+				cp.serve(w, r)
+				return
+			}
+			base80.ServeHTTP(w, r)
+		})
+		redSrv := &http.Server{Addr: redirectAddr, Handler: h80, ReadHeaderTimeout: 15 * time.Second}
 		run("HTTP->HTTPS redirect", redSrv, redSrv.ListenAndServe)
 	}
 
@@ -180,6 +221,7 @@ func main() {
 	defer cancel()
 	forwarder.Shutdown()
 	dnat.Shutdown()
+	domainRouter.Shutdown()
 	for _, s := range servers {
 		_ = s.Shutdown(ctx)
 	}

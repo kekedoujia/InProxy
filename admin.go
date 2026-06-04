@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"html/template"
 	"log"
 	"net/http"
@@ -41,8 +42,8 @@ func (ad *Admin) Handler() http.Handler {
 	mux.HandleFunc("/_admin/dnat/save", ad.requireAuth(ad.saveDNAT))
 	mux.HandleFunc("/_admin/dnat/delete", ad.requireAuth(ad.deleteDNAT))
 	mux.HandleFunc("/_admin/domains", ad.requireAuth(ad.domains))
-	mux.HandleFunc("/_admin/domains/save", ad.requireAuth(ad.saveVHost))
-	mux.HandleFunc("/_admin/domains/delete", ad.requireAuth(ad.deleteVHost))
+	mux.HandleFunc("/_admin/domains/save", ad.requireAuth(ad.saveDomain))
+	mux.HandleFunc("/_admin/domains/delete", ad.requireAuth(ad.deleteDomain))
 	mux.HandleFunc("/_admin", ad.requireAuth(ad.dashboard))
 	mux.HandleFunc("/_admin/", ad.requireAuth(ad.dashboard))
 	// on a dedicated port, hitting the root goes straight to the admin UI
@@ -151,41 +152,49 @@ func (ad *Admin) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ad *Admin) domains(w http.ResponseWriter, r *http.Request) {
+	domains := ad.store.ListDomains()
+	js, _ := json.Marshal(domains)
 	ad.render(w, "domains.html", map[string]any{
-		"Active": "domains",
-		"VHosts": ad.store.ListVHosts(),
-		"Notice": r.URL.Query().Get("notice"),
-		"Error":  r.URL.Query().Get("error"),
+		"Active":      "domains",
+		"Domains":     domains,
+		"DomainsJSON": template.JS(js),
+		"Notice":      r.URL.Query().Get("notice"),
+		"Error":       r.URL.Query().Get("error"),
 	})
 }
 
-func (ad *Admin) saveVHost(w http.ResponseWriter, r *http.Request) {
+func (ad *Admin) saveDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/_admin/domains", http.StatusSeeOther)
 		return
 	}
-	v := VHost{
+	var forwards []PortForward
+	if s := strings.TrimSpace(r.FormValue("forwards_json")); s != "" {
+		if err := json.Unmarshal([]byte(s), &forwards); err != nil {
+			ad.redirectMsgTo(w, r, "/_admin/domains", "error", "could not read port forwards: "+err.Error())
+			return
+		}
+	}
+	d := Domain{
 		Host:        strings.TrimSpace(r.FormValue("host")),
-		Target:      strings.TrimSpace(r.FormValue("target")),
-		SkipVerify:  r.FormValue("skip_verify") == "on",
 		Description: strings.TrimSpace(r.FormValue("description")),
-		Enabled:     r.FormValue("enabled") == "on",
+		Forwards:    forwards,
 	}
 	oldHost := strings.TrimSpace(r.FormValue("old_host"))
-	if err := ad.store.UpsertVHost(oldHost, v); err != nil {
+	if err := ad.store.UpsertDomain(oldHost, d); err != nil {
 		ad.redirectMsgTo(w, r, "/_admin/domains", "error", err.Error())
 		return
 	}
-	ad.redirectMsgTo(w, r, "/_admin/domains", "notice", "Saved domain "+v.Host+" (certificate is obtained on first HTTPS request)")
+	ad.redirectMsgTo(w, r, "/_admin/domains", "notice", "Saved domain "+d.Host+" (terminate-mode certs are obtained on first HTTPS request)")
 }
 
-func (ad *Admin) deleteVHost(w http.ResponseWriter, r *http.Request) {
+func (ad *Admin) deleteDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/_admin/domains", http.StatusSeeOther)
 		return
 	}
 	host := strings.TrimSpace(r.FormValue("host"))
-	if err := ad.store.DeleteVHost(host); err != nil {
+	if err := ad.store.DeleteDomain(host); err != nil {
 		ad.redirectMsgTo(w, r, "/_admin/domains", "error", err.Error())
 		return
 	}
