@@ -27,6 +27,11 @@ internal user ──────────►│                              
 - **Raw TCP port forwarding** (separate "Port forwarding" admin page): map a public listen
   port on this host to a `host:port` on an internal machine. Works for any TCP protocol
   (SSH, RDP, databases, …); listeners start/stop the moment you save.
+- **Kernel DNAT** ("DNAT" admin page): destination-NAT a public port to an internal
+  `host:port` via iptables — faster than userspace forwarding and supports **UDP**. Rules
+  live in dedicated nat chains (`INPROXY_DNAT` / `INPROXY_POST`) so nothing else is touched;
+  an optional per-rule SNAT (masquerade) fixes the return path for VPN/internal targets.
+  Requires `CAP_NET_ADMIN` (granted by the systemd unit; the process stays non-root).
 - Admin edits take effect **immediately**, no restart.
 - WebSocket and streaming responses supported; injects `X-Forwarded-For/Host/Proto/Prefix`.
 
@@ -117,6 +122,7 @@ Changes take effect immediately.
 | `config.go`  | route + forward models, thread-safe store, JSON persistence (auto-migrates the legacy array form), validation |
 | `proxy.go`   | reverse proxy construction, prefix stripping, forwarding headers |
 | `forward.go` | runtime TCP port forwarders: reconcile listeners on config change, pipe connections |
+| `dnat.go`    | runtime kernel DNAT: reconcile iptables nat chains on config change (needs CAP_NET_ADMIN) |
 | `auth.go`    | IP allowlist + password login + signed session cookie |
 | `admin.go` + `templates/` | admin UI handlers and pages (embedded in the binary) |
 | `deploy/`    | systemd unit, env example, interactive installer |

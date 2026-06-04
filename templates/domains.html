@@ -1,9 +1,9 @@
-{{define "dashboard.html"}}<!DOCTYPE html>
+{{define "domains.html"}}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>inproxy admin</title>
+<title>inproxy admin — domains</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -25,6 +25,7 @@
   .error  { background: #7f1d1d; color: #fca5a5; }
   .table-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .9rem; }
   .table-head h2 { font-size: .95rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  .lead { color: #64748b; font-size: .82rem; margin: -.4rem 0 1rem; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: .9rem; }
   th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; }
   th { color: #94a3b8; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
@@ -44,7 +45,6 @@
   .btn.del { color: #fca5a5; border-color: #7f1d1d; }
   .empty { color: #64748b; padding: 1rem 0; }
 
-  /* modal layer */
   .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, .7);
        display: none; align-items: flex-start; justify-content: center; padding: 4rem 1rem; z-index: 50; }
   .modal-overlay.open { display: flex; }
@@ -66,12 +66,10 @@
   .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
   .check label { margin: 0; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
-  /* mode-driven button visibility */
   .modal[data-mode="view"] .act-edit { display: none; }
   .modal[data-mode="edit"] .act-view,
   .modal[data-mode="add"]  .act-view { display: none; }
 
-  /* phones / narrow screens: stack the table into per-route cards */
   @media (max-width: 640px) {
     main { padding: 1rem; }
     header { padding: .9rem 1rem; }
@@ -108,82 +106,81 @@
     {{if .Error}}<div class="msg error">{{.Error}}</div>{{end}}
 
     <div class="table-head">
-      <h2>HTTP service</h2>
-      <button class="btn primary" onclick="openAdd()">+ Add route</button>
+      <h2>Domains</h2>
+      <button class="btn primary" onclick="openAdd()">+ Add domain</button>
     </div>
+    <p class="lead">Map a whole public hostname to one backend, served at the root path. inproxy
+       terminates HTTPS with an automatic Let's Encrypt certificate (the domain's DNS must point
+       here and ports 80/443 reachable), and reverse-proxies to the backend. Tick <b>Skip backend
+       TLS verify</b> when the internal service uses a self-signed certificate. HTTP is auto-redirected
+       to HTTPS. Changes apply immediately.</p>
 
     <table>
       <thead>
-        <tr><th>Public path</th><th>Backend</th><th>Strip prefix</th><th>Concurrency</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th>Domain</th><th>Backend</th><th>Skip verify</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
       </thead>
       <tbody>
-        {{range .Routes}}
+        {{range .VHosts}}
         <tr>
-          <td data-label="Public path"><code>/{{.Prefix}}/</code></td>
+          <td data-label="Domain"><code>{{.Host}}</code></td>
           <td data-label="Backend"><code>{{.Target}}</code></td>
-          <td data-label="Strip prefix">{{if .StripPrefix}}yes{{else}}no{{end}}</td>
-          <td data-label="Concurrency">{{if .MaxConcurrent}}{{.MaxConcurrent}}{{else}}∞{{end}}</td>
+          <td data-label="Skip verify">{{if .SkipVerify}}yes{{else}}no{{end}}</td>
           <td data-label="Status">{{if .Enabled}}<span class="badge on">enabled</span>{{else}}<span class="badge off">disabled</span>{{end}}</td>
           <td data-label="Notes">{{.Description}}</td>
           <td data-label="Actions" class="actions">
             <button class="btn"
-               onclick='openDetail({{.Prefix}}, {{.Target}}, {{.StripPrefix}}, {{.Enabled}}, {{.Description}}, {{.MaxConcurrent}})'>Detail</button>
-            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete /{{.Prefix}}/ ?');">
-              <input type="hidden" name="prefix" value="{{.Prefix}}">
+               onclick='openDetail({{.Host}}, {{.Target}}, {{.SkipVerify}}, {{.Enabled}}, {{.Description}})'>Detail</button>
+            <form method="post" action="/_admin/domains/delete" onsubmit="return confirm('Delete domain {{.Host}} ?');">
+              <input type="hidden" name="host" value="{{.Host}}">
               <button class="btn del" type="submit">Delete</button>
             </form>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="7" class="empty">No routes yet. Use “Add route” to create one.</td></tr>
+        <tr><td colspan="6" class="empty">No domains yet. Use “Add domain” to create one.</td></tr>
         {{end}}
       </tbody>
     </table>
   </main>
 
-  <!-- shared modal layer: add / view / edit a route -->
+  <!-- shared modal layer: add / view / edit a domain -->
   <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
-        <h2 id="modal-title">Add route</h2>
+        <h2 id="modal-title">Add domain</h2>
         <div class="modal-actions">
           <button type="button" class="btn act-view" onclick="enterEdit()">Edit</button>
           <button type="button" class="btn del act-view" onclick="submitDelete()">Delete</button>
-          <button type="submit" form="route-form" class="btn primary act-edit">Save</button>
+          <button type="submit" form="vh-form" class="btn primary act-edit">Save</button>
           <button type="button" class="btn act-edit" onclick="cancelForm()">Cancel</button>
         </div>
         <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <form method="post" action="/_admin/save" id="route-form">
-          <input type="hidden" name="old_prefix" id="old_prefix" value="">
+        <form method="post" action="/_admin/domains/save" id="vh-form">
+          <input type="hidden" name="old_host" id="old_host" value="">
           <div class="grid">
-            <div>
-              <label for="prefix">Public path prefix</label>
-              <input type="text" id="prefix" name="prefix" placeholder="serviceA" required>
-              <div class="hint">Reached at https://&lt;host&gt;/serviceA/...</div>
-            </div>
-            <div>
-              <label for="target">Backend address</label>
-              <input type="text" id="target" name="target" placeholder="http://10.8.0.5:8080" required>
-              <div class="hint">Internal service scheme://host:port</div>
-            </div>
-            <div>
-              <label for="max_concurrent">Max concurrency</label>
-              <input type="text" id="max_concurrent" name="max_concurrent" inputmode="numeric" placeholder="0 = unlimited">
-              <div class="hint">Max simultaneous requests forwarded (0 = unlimited)</div>
-            </div>
-            <div class="check">
-              <input type="checkbox" id="strip_prefix" name="strip_prefix" checked>
-              <label for="strip_prefix">Strip prefix when forwarding (/serviceA/api → /api)</label>
+            <div class="full">
+              <label for="host">Public domain</label>
+              <input type="text" id="host" name="host" placeholder="aperturemail.aperture-x.com" required>
+              <div class="hint">DNS must point to this host; Let's Encrypt issues the cert on first request</div>
             </div>
             <div class="full">
-              <label for="description">Notes (optional)</label>
-              <input type="text" id="description" name="description" placeholder="e.g. Finance system">
+              <label for="target">Backend address</label>
+              <input type="text" id="target" name="target" placeholder="https://10.8.0.60:18443" required>
+              <div class="hint">Internal service scheme://host:port (use https:// for a TLS backend)</div>
+            </div>
+            <div class="check">
+              <input type="checkbox" id="skip_verify" name="skip_verify" checked>
+              <label for="skip_verify">Skip backend TLS verify (self-signed)</label>
             </div>
             <div class="check">
               <input type="checkbox" id="enabled" name="enabled" checked>
               <label for="enabled">Enabled</label>
+            </div>
+            <div class="full">
+              <label for="description">Notes (optional)</label>
+              <input type="text" id="description" name="description" placeholder="e.g. Webmail">
             </div>
           </div>
         </form>
@@ -192,62 +189,61 @@
   </div>
 
   <!-- hidden form used by the Delete action inside the modal -->
-  <form method="post" action="/_admin/delete" id="delete-form">
-    <input type="hidden" name="prefix" id="del_prefix">
+  <form method="post" action="/_admin/domains/delete" id="delete-form">
+    <input type="hidden" name="host" id="del_host">
   </form>
 
   <script>
     const box = document.getElementById('modal-box');
-    const FIELDS = ['prefix', 'target', 'max_concurrent', 'description', 'strip_prefix', 'enabled'];
-    let current = null; // last viewed route, for restoring on Cancel
+    const FIELDS = ['host', 'target', 'skip_verify', 'description', 'enabled'];
+    let current = null;
 
     function setEditable(on) {
       FIELDS.forEach(id => { document.getElementById(id).disabled = !on; });
     }
-    function fill(r) {
-      document.getElementById('old_prefix').value = r.prefix || '';
-      document.getElementById('prefix').value = r.prefix || '';
-      document.getElementById('target').value = r.target || '';
-      document.getElementById('max_concurrent').value = r.maxConc || 0;
-      document.getElementById('description').value = r.desc || '';
-      document.getElementById('strip_prefix').checked = !!r.strip;
-      document.getElementById('enabled').checked = !!r.enabled;
+    function fill(v) {
+      document.getElementById('old_host').value = v.host || '';
+      document.getElementById('host').value = v.host || '';
+      document.getElementById('target').value = v.target || '';
+      document.getElementById('skip_verify').checked = !!v.skip;
+      document.getElementById('description').value = v.desc || '';
+      document.getElementById('enabled').checked = !!v.enabled;
     }
     function showModal() { document.getElementById('modal').classList.add('open'); }
     function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
     function openAdd() {
       current = null;
-      fill({ strip: true, enabled: true, maxConc: 0 });
-      document.getElementById('modal-title').textContent = 'Add route';
+      fill({ skip: true, enabled: true });
+      document.getElementById('modal-title').textContent = 'Add domain';
       box.dataset.mode = 'add';
       setEditable(true);
       showModal();
-      document.getElementById('prefix').focus();
+      document.getElementById('host').focus();
     }
-    function openDetail(prefix, target, strip, enabled, desc, maxConc) {
-      current = { prefix, target, strip, enabled, desc, maxConc };
+    function openDetail(host, target, skip, enabled, desc) {
+      current = { host, target, skip, enabled, desc };
       fill(current);
-      document.getElementById('modal-title').textContent = 'Route /' + prefix + '/';
+      document.getElementById('modal-title').textContent = host;
       box.dataset.mode = 'view';
       setEditable(false);
       showModal();
     }
     function enterEdit() {
-      document.getElementById('modal-title').textContent = 'Edit route /' + current.prefix + '/';
+      document.getElementById('modal-title').textContent = 'Edit ' + current.host;
       box.dataset.mode = 'edit';
       setEditable(true);
     }
     function cancelForm() {
       if (box.dataset.mode === 'add' || !current) { closeModal(); return; }
-      fill(current); // discard edits, back to read-only view
-      document.getElementById('modal-title').textContent = 'Route /' + current.prefix + '/';
+      fill(current);
+      document.getElementById('modal-title').textContent = current.host;
       box.dataset.mode = 'view';
       setEditable(false);
     }
     function submitDelete() {
-      if (!current || !confirm('Delete /' + current.prefix + '/ ?')) return;
-      document.getElementById('del_prefix').value = current.prefix;
+      if (!current || !confirm('Delete domain ' + current.host + ' ?')) return;
+      document.getElementById('del_host').value = current.host;
       document.getElementById('delete-form').submit();
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });

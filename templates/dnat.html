@@ -1,9 +1,9 @@
-{{define "dashboard.html"}}<!DOCTYPE html>
+{{define "dnat.html"}}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>inproxy admin</title>
+<title>inproxy admin — DNAT</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -25,6 +25,7 @@
   .error  { background: #7f1d1d; color: #fca5a5; }
   .table-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .9rem; }
   .table-head h2 { font-size: .95rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  .lead { color: #64748b; font-size: .82rem; margin: -.4rem 0 1rem; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: .9rem; }
   th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; }
   th { color: #94a3b8; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
@@ -32,6 +33,7 @@
   .badge { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px; }
   .on { background: #065f46; color: #6ee7b7; }
   .off { background: #475569; color: #cbd5e1; }
+  .err { background: #7f1d1d; color: #fca5a5; }
   .actions { white-space: nowrap; }
   .actions > * + * { margin-left: .5rem; }
   .actions form { display: inline-block; margin: 0; vertical-align: middle; }
@@ -44,7 +46,6 @@
   .btn.del { color: #fca5a5; border-color: #7f1d1d; }
   .empty { color: #64748b; padding: 1rem 0; }
 
-  /* modal layer */
   .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, .7);
        display: none; align-items: flex-start; justify-content: center; padding: 4rem 1rem; z-index: 50; }
   .modal-overlay.open { display: flex; }
@@ -60,18 +61,16 @@
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
   .grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
-  input[type=text] { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
+  input[type=text], select { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
           background: #0f172a; color: #e2e8f0; font-size: .95rem; }
-  input:disabled { opacity: .65; cursor: default; }
+  input:disabled, select:disabled { opacity: .65; cursor: default; }
   .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
   .check label { margin: 0; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
-  /* mode-driven button visibility */
   .modal[data-mode="view"] .act-edit { display: none; }
   .modal[data-mode="edit"] .act-view,
   .modal[data-mode="add"]  .act-view { display: none; }
 
-  /* phones / narrow screens: stack the table into per-route cards */
   @media (max-width: 640px) {
     main { padding: 1rem; }
     header { padding: .9rem 1rem; }
@@ -108,82 +107,98 @@
     {{if .Error}}<div class="msg error">{{.Error}}</div>{{end}}
 
     <div class="table-head">
-      <h2>HTTP service</h2>
-      <button class="btn primary" onclick="openAdd()">+ Add route</button>
+      <h2>DNAT</h2>
+      <button class="btn primary" onclick="openAdd()">+ Add rule</button>
     </div>
+    <p class="lead">Kernel destination-NAT (iptables): traffic to a public port on this host is
+       rewritten to an internal <code>host:port</code>. Faster than userspace forwarding and supports
+       UDP. Leave <b>SNAT</b> on for internal/VPN targets (rewrites the return path so replies come
+       back); turn it off to preserve the client's real source IP when the target already routes
+       replies through this host. Changes apply immediately.</p>
 
     <table>
       <thead>
-        <tr><th>Public path</th><th>Backend</th><th>Strip prefix</th><th>Concurrency</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th>Name</th><th>Proto</th><th>Public port</th><th>Internal target</th><th>SNAT</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
       </thead>
       <tbody>
-        {{range .Routes}}
+        {{range .Rules}}
         <tr>
-          <td data-label="Public path"><code>/{{.Prefix}}/</code></td>
-          <td data-label="Backend"><code>{{.Target}}</code></td>
-          <td data-label="Strip prefix">{{if .StripPrefix}}yes{{else}}no{{end}}</td>
-          <td data-label="Concurrency">{{if .MaxConcurrent}}{{.MaxConcurrent}}{{else}}∞{{end}}</td>
-          <td data-label="Status">{{if .Enabled}}<span class="badge on">enabled</span>{{else}}<span class="badge off">disabled</span>{{end}}</td>
+          <td data-label="Name">{{.Name}}</td>
+          <td data-label="Proto">{{.Proto}}</td>
+          <td data-label="Public port"><code>{{.ListenPort}}</code></td>
+          <td data-label="Internal target"><code>{{.Target}}</code></td>
+          <td data-label="SNAT">{{if .SNAT}}yes{{else}}no{{end}}</td>
+          <td data-label="Status">
+            {{if eq .Status "active"}}<span class="badge on">active</span>
+            {{else if eq .Status "disabled"}}<span class="badge off">disabled</span>
+            {{else}}<span class="badge err" title="{{.Status}}">error</span>{{end}}
+          </td>
           <td data-label="Notes">{{.Description}}</td>
           <td data-label="Actions" class="actions">
             <button class="btn"
-               onclick='openDetail({{.Prefix}}, {{.Target}}, {{.StripPrefix}}, {{.Enabled}}, {{.Description}}, {{.MaxConcurrent}})'>Detail</button>
-            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete /{{.Prefix}}/ ?');">
-              <input type="hidden" name="prefix" value="{{.Prefix}}">
+               onclick='openDetail({{.Name}}, {{.Proto}}, {{.ListenPort}}, {{.Target}}, {{.SNAT}}, {{.Enabled}}, {{.Description}})'>Detail</button>
+            <form method="post" action="/_admin/dnat/delete" onsubmit="return confirm('Delete DNAT rule {{.Name}} ?');">
+              <input type="hidden" name="name" value="{{.Name}}">
               <button class="btn del" type="submit">Delete</button>
             </form>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="7" class="empty">No routes yet. Use “Add route” to create one.</td></tr>
+        <tr><td colspan="8" class="empty">No DNAT rules yet. Use “Add rule” to create one.</td></tr>
         {{end}}
       </tbody>
     </table>
   </main>
 
-  <!-- shared modal layer: add / view / edit a route -->
+  <!-- shared modal layer: add / view / edit a DNAT rule -->
   <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
-        <h2 id="modal-title">Add route</h2>
+        <h2 id="modal-title">Add DNAT rule</h2>
         <div class="modal-actions">
           <button type="button" class="btn act-view" onclick="enterEdit()">Edit</button>
           <button type="button" class="btn del act-view" onclick="submitDelete()">Delete</button>
-          <button type="submit" form="route-form" class="btn primary act-edit">Save</button>
+          <button type="submit" form="dnat-form" class="btn primary act-edit">Save</button>
           <button type="button" class="btn act-edit" onclick="cancelForm()">Cancel</button>
         </div>
         <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <form method="post" action="/_admin/save" id="route-form">
-          <input type="hidden" name="old_prefix" id="old_prefix" value="">
+        <form method="post" action="/_admin/dnat/save" id="dnat-form">
+          <input type="hidden" name="old_name" id="old_name" value="">
           <div class="grid">
             <div>
-              <label for="prefix">Public path prefix</label>
-              <input type="text" id="prefix" name="prefix" placeholder="serviceA" required>
-              <div class="hint">Reached at https://&lt;host&gt;/serviceA/...</div>
+              <label for="name">Name</label>
+              <input type="text" id="name" name="name" placeholder="gpu-dnat" required>
+              <div class="hint">Letters, digits, _ and - ; unique</div>
             </div>
             <div>
-              <label for="target">Backend address</label>
-              <input type="text" id="target" name="target" placeholder="http://10.8.0.5:8080" required>
-              <div class="hint">Internal service scheme://host:port</div>
+              <label for="proto">Protocol</label>
+              <select id="proto" name="proto">
+                <option value="tcp">tcp</option>
+                <option value="udp">udp</option>
+              </select>
             </div>
             <div>
-              <label for="max_concurrent">Max concurrency</label>
-              <input type="text" id="max_concurrent" name="max_concurrent" inputmode="numeric" placeholder="0 = unlimited">
-              <div class="hint">Max simultaneous requests forwarded (0 = unlimited)</div>
+              <label for="listen_port">Public port</label>
+              <input type="text" id="listen_port" name="listen_port" inputmode="numeric" placeholder="8765" required>
+              <div class="hint">Port on this host (any of its IPs)</div>
+            </div>
+            <div>
+              <label for="target">Internal target (host:port)</label>
+              <input type="text" id="target" name="target" placeholder="10.8.0.60:8765" required>
             </div>
             <div class="check">
-              <input type="checkbox" id="strip_prefix" name="strip_prefix" checked>
-              <label for="strip_prefix">Strip prefix when forwarding (/serviceA/api → /api)</label>
-            </div>
-            <div class="full">
-              <label for="description">Notes (optional)</label>
-              <input type="text" id="description" name="description" placeholder="e.g. Finance system">
+              <input type="checkbox" id="snat" name="snat" checked>
+              <label for="snat">SNAT return path (masquerade)</label>
             </div>
             <div class="check">
               <input type="checkbox" id="enabled" name="enabled" checked>
               <label for="enabled">Enabled</label>
+            </div>
+            <div class="full">
+              <label for="description">Notes (optional)</label>
+              <input type="text" id="description" name="description" placeholder="e.g. GPU monitor at root">
             </div>
           </div>
         </form>
@@ -192,62 +207,63 @@
   </div>
 
   <!-- hidden form used by the Delete action inside the modal -->
-  <form method="post" action="/_admin/delete" id="delete-form">
-    <input type="hidden" name="prefix" id="del_prefix">
+  <form method="post" action="/_admin/dnat/delete" id="delete-form">
+    <input type="hidden" name="name" id="del_name">
   </form>
 
   <script>
     const box = document.getElementById('modal-box');
-    const FIELDS = ['prefix', 'target', 'max_concurrent', 'description', 'strip_prefix', 'enabled'];
-    let current = null; // last viewed route, for restoring on Cancel
+    const FIELDS = ['name', 'proto', 'listen_port', 'target', 'snat', 'description', 'enabled'];
+    let current = null;
 
     function setEditable(on) {
       FIELDS.forEach(id => { document.getElementById(id).disabled = !on; });
     }
-    function fill(r) {
-      document.getElementById('old_prefix').value = r.prefix || '';
-      document.getElementById('prefix').value = r.prefix || '';
-      document.getElementById('target').value = r.target || '';
-      document.getElementById('max_concurrent').value = r.maxConc || 0;
-      document.getElementById('description').value = r.desc || '';
-      document.getElementById('strip_prefix').checked = !!r.strip;
-      document.getElementById('enabled').checked = !!r.enabled;
+    function fill(d) {
+      document.getElementById('old_name').value = d.name || '';
+      document.getElementById('name').value = d.name || '';
+      document.getElementById('proto').value = d.proto || 'tcp';
+      document.getElementById('listen_port').value = d.port || '';
+      document.getElementById('target').value = d.target || '';
+      document.getElementById('snat').checked = !!d.snat;
+      document.getElementById('description').value = d.desc || '';
+      document.getElementById('enabled').checked = !!d.enabled;
     }
     function showModal() { document.getElementById('modal').classList.add('open'); }
     function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
     function openAdd() {
       current = null;
-      fill({ strip: true, enabled: true, maxConc: 0 });
-      document.getElementById('modal-title').textContent = 'Add route';
+      fill({ proto: 'tcp', snat: true, enabled: true });
+      document.getElementById('modal-title').textContent = 'Add DNAT rule';
       box.dataset.mode = 'add';
       setEditable(true);
       showModal();
-      document.getElementById('prefix').focus();
+      document.getElementById('name').focus();
     }
-    function openDetail(prefix, target, strip, enabled, desc, maxConc) {
-      current = { prefix, target, strip, enabled, desc, maxConc };
+    function openDetail(name, proto, port, target, snat, enabled, desc) {
+      current = { name, proto, port, target, snat, enabled, desc };
       fill(current);
-      document.getElementById('modal-title').textContent = 'Route /' + prefix + '/';
+      document.getElementById('modal-title').textContent = 'DNAT rule ' + name;
       box.dataset.mode = 'view';
       setEditable(false);
       showModal();
     }
     function enterEdit() {
-      document.getElementById('modal-title').textContent = 'Edit route /' + current.prefix + '/';
+      document.getElementById('modal-title').textContent = 'Edit DNAT rule ' + current.name;
       box.dataset.mode = 'edit';
       setEditable(true);
     }
     function cancelForm() {
       if (box.dataset.mode === 'add' || !current) { closeModal(); return; }
-      fill(current); // discard edits, back to read-only view
-      document.getElementById('modal-title').textContent = 'Route /' + current.prefix + '/';
+      fill(current);
+      document.getElementById('modal-title').textContent = 'DNAT rule ' + current.name;
       box.dataset.mode = 'view';
       setEditable(false);
     }
     function submitDelete() {
-      if (!current || !confirm('Delete /' + current.prefix + '/ ?')) return;
-      document.getElementById('del_prefix').value = current.prefix;
+      if (!current || !confirm('Delete DNAT rule ' + current.name + ' ?')) return;
+      document.getElementById('del_name').value = current.name;
       document.getElementById('delete-form').submit();
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });

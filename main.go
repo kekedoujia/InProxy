@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -57,7 +59,12 @@ func main() {
 	store.SetForwardListener(forwarder.Apply)
 	forwarder.Apply(store.ListForwards())
 
-	admin := NewAdmin(store, auth, forwarder)
+	// Kernel DNAT rules (iptables): same reconcile-on-change + apply-on-start.
+	dnat := NewDNATManager()
+	store.SetDNATListener(dnat.Apply)
+	dnat.Apply(store.ListDNAT())
+
+	admin := NewAdmin(store, auth, forwarder, dnat)
 
 	// External proxy handler: only forwards business routes + health check,
 	// never exposes the admin UI.
@@ -65,6 +72,11 @@ func main() {
 		if r.URL.Path == "/_healthz" {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("ok"))
+			return
+		}
+		// host-based routing wins: a whole hostname mapped to one backend
+		if vh, ok := store.MatchVHost(hostOnly(r.Host)); ok {
+			vh.serve(w, r)
 			return
 		}
 		if c, ok := store.Match(r.URL.Path); ok {
@@ -87,10 +99,17 @@ func main() {
 			log.Fatal("TLS_MODE=auto requires EXTERNAL_HOST to be your domain (e.g. tools.aperture-x.com)")
 		}
 		m := &autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(externalHost),
-			Cache:      autocert.DirCache(acmeCache),
-			Email:      acmeEmail,
+			Prompt: autocert.AcceptTOS,
+			// allow the main host plus any configured vhost, so Let's Encrypt
+			// issues certs for vhosts (e.g. mail.example.com) on first request
+			HostPolicy: func(_ context.Context, host string) error {
+				if strings.EqualFold(host, externalHost) || store.HasVHost(host) {
+					return nil
+				}
+				return fmt.Errorf("acme: host %q is not configured", host)
+			},
+			Cache: autocert.DirCache(acmeCache),
+			Email: acmeEmail,
 		}
 		proxyTLS = m.TLSConfig()
 		// :80 serves the ACME http-01 challenge and redirects everything else to HTTPS
@@ -160,10 +179,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	forwarder.Shutdown()
+	dnat.Shutdown()
 	for _, s := range servers {
 		_ = s.Shutdown(ctx)
 	}
 	wg.Wait()
+}
+
+// hostOnly strips any :port from a request Host.
+func hostOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 // redirectToHTTPS 301-redirects any HTTP request to HTTPS on the same host.

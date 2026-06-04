@@ -14,9 +14,10 @@ ExecStart=/usr/local/bin/inproxy
 Restart=on-failure
 RestartSec=2
 
-# allow a non-root process to bind privileged ports like 80/443
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# CAP_NET_BIND_SERVICE: bind privileged ports (80/443) as a non-root process.
+# CAP_NET_ADMIN: manage the DNAT page's iptables nat rules (still non-root).
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 
 # hardening
 NoNewPrivileges=true
@@ -26,7 +27,8 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required by iptables' nf_tables backend (talks to the kernel over netlink)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 # only the config directory is writable (needed to save routes/certs)
 ReadWritePaths=/etc/inproxy
 

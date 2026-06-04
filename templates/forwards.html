@@ -99,6 +99,8 @@
   <nav class="tabs">
     <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">HTTP service</a>
     <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">Port forwarding</a>
+    <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">DNAT</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">Domains</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
