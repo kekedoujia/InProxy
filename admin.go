@@ -314,6 +314,7 @@ func (ad *Admin) saveForward(w http.ResponseWriter, r *http.Request) {
 	}
 	f := Forward{
 		Name:        strings.TrimSpace(r.FormValue("name")),
+		Proto:       strings.TrimSpace(r.FormValue("proto")),
 		Listen:      strings.TrimSpace(r.FormValue("listen")),
 		Target:      strings.TrimSpace(r.FormValue("target")),
 		Description: strings.TrimSpace(r.FormValue("description")),

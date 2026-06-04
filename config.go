@@ -26,11 +26,12 @@ type Route struct {
 	MaxConcurrent int    `json:"max_concurrent"` // max simultaneous forwarded requests (0 = unlimited)
 }
 
-// Forward is a raw TCP port forward: a public listen port whose connections are
-// piped to an internal host:port. Unlike Route (HTTP), this is L4 — it carries
-// any TCP protocol (SSH, RDP, databases, ...).
+// Forward is a raw L4 port forward: a public listen port whose connections are
+// piped to an internal host:port. Carries any TCP protocol (SSH, RDP, databases)
+// or UDP datagrams (DNS, WireGuard, syslog, ...) depending on Proto.
 type Forward struct {
 	Name        string `json:"name"`        // unique identifier
+	Proto       string `json:"proto"`       // "tcp" | "udp" (empty = tcp, legacy)
 	Listen      string `json:"listen"`      // external listen addr, e.g. ":2222" or "0.0.0.0:2222"
 	Target      string `json:"target"`      // internal host:port, e.g. "10.8.0.5:22"
 	Description string `json:"description"` // notes
@@ -484,11 +485,11 @@ func (s *Store) UpsertForward(oldName string, f Forward) error {
 			idx = i
 		}
 	}
-	// no two forwards may bind the same listen address
+	// no two forwards may bind the same proto + listen address
 	for _, e := range s.forwards {
-		if e.Name != f.Name && e.Listen == f.Listen {
+		if e.Name != f.Name && e.Proto == f.Proto && e.Listen == f.Listen {
 			s.mu.Unlock()
-			return fmt.Errorf("listen address %q is already used by forward %q", f.Listen, e.Name)
+			return fmt.Errorf("%s listen address %q is already used by forward %q", f.Proto, f.Listen, e.Name)
 		}
 	}
 	if oldName == "" { // add
@@ -824,6 +825,13 @@ func validateForward(f *Forward) error {
 	f.Name = strings.TrimSpace(f.Name)
 	if !prefixPattern.MatchString(f.Name) {
 		return errors.New("name may contain only letters, digits, underscore and hyphen, and must start with a letter or digit")
+	}
+	f.Proto = strings.ToLower(strings.TrimSpace(f.Proto))
+	if f.Proto == "" {
+		f.Proto = "tcp"
+	}
+	if f.Proto != "tcp" && f.Proto != "udp" && f.Proto != "tcp+udp" {
+		return errors.New("protocol must be tcp, udp, or tcp+udp")
 	}
 	listen, err := normalizeListen(f.Listen)
 	if err != nil {

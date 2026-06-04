@@ -61,9 +61,13 @@
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
   .grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
-  input[type=text] { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
+  input[type=text], select { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
           background: #0f172a; color: #e2e8f0; font-size: .95rem; }
-  input:disabled { opacity: .65; cursor: default; }
+  select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 1.9rem;
+          background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%2394a3b8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
+          background-repeat: no-repeat; background-position: right .6rem center; }
+  input[type=text]:focus, select:focus { outline: none; border-color: #3b82f6; }
+  input:disabled, select:disabled { opacity: .65; cursor: default; }
   .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
   .check label { margin: 0; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
@@ -110,17 +114,18 @@
       <h2>Port forwarding</h2>
       <button class="btn primary" onclick="openAdd()">+ Add forward</button>
     </div>
-    <p class="lead">Raw TCP forwarding: map a public listen port on this host to a port on an
-       internal machine. Works for any TCP protocol (SSH, RDP, databases…). Changes take effect immediately.</p>
+    <p class="lead">Raw L4 forwarding: map a public listen port on this host to a port on an internal
+       machine. TCP (SSH, RDP, databases…) or UDP (DNS, WireGuard, syslog…). Changes take effect immediately.</p>
 
     <table>
       <thead>
-        <tr><th>Name</th><th>External listen</th><th>Internal target</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th>Name</th><th>Proto</th><th>External listen</th><th>Internal target</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
       </thead>
       <tbody>
         {{range .Forwards}}
         <tr>
           <td data-label="Name">{{.Name}}</td>
+          <td data-label="Proto">{{if .Proto}}{{.Proto}}{{else}}tcp{{end}}</td>
           <td data-label="External listen"><code>{{.Listen}}</code></td>
           <td data-label="Internal target"><code>{{.Target}}</code></td>
           <td data-label="Status">
@@ -131,7 +136,7 @@
           <td data-label="Notes">{{.Description}}</td>
           <td data-label="Actions" class="actions">
             <button class="btn"
-               onclick='openDetail({{.Name}}, {{.Listen}}, {{.Target}}, {{.Enabled}}, {{.Description}})'>Detail</button>
+               onclick='openDetail({{.Name}}, {{.Proto}}, {{.Listen}}, {{.Target}}, {{.Enabled}}, {{.Description}})'>Detail</button>
             <form method="post" action="/_admin/forwards/delete" onsubmit="return confirm('Delete forward {{.Name}} ?');">
               <input type="hidden" name="name" value="{{.Name}}">
               <button class="btn del" type="submit">Delete</button>
@@ -139,7 +144,7 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="empty">No forwards yet. Use “Add forward” to create one.</td></tr>
+        <tr><td colspan="7" class="empty">No forwards yet. Use “Add forward” to create one.</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -168,14 +173,22 @@
               <div class="hint">Letters, digits, _ and - ; unique</div>
             </div>
             <div>
+              <label for="proto">Protocol</label>
+              <select id="proto" name="proto" style="width:100%">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+                <option value="tcp+udp">TCP + UDP</option>
+              </select>
+            </div>
+            <div>
               <label for="listen">External listen port</label>
               <input type="text" id="listen" name="listen" placeholder="2222" required>
               <div class="hint">Port (binds all interfaces) or host:port, e.g. <code>2222</code> / <code>0.0.0.0:2222</code></div>
             </div>
-            <div class="full">
+            <div>
               <label for="target">Internal target (host:port)</label>
               <input type="text" id="target" name="target" placeholder="10.8.0.5:22" required>
-              <div class="hint">The internal machine and port to forward TCP connections to</div>
+              <div class="hint">Internal machine and port to forward to</div>
             </div>
             <div class="full">
               <label for="description">Notes (optional)</label>
@@ -198,7 +211,7 @@
 
   <script>
     const box = document.getElementById('modal-box');
-    const FIELDS = ['name', 'listen', 'target', 'description', 'enabled'];
+    const FIELDS = ['name', 'proto', 'listen', 'target', 'description', 'enabled'];
     let current = null;
 
     function setEditable(on) {
@@ -207,6 +220,7 @@
     function fill(f) {
       document.getElementById('old_name').value = f.name || '';
       document.getElementById('name').value = f.name || '';
+      document.getElementById('proto').value = f.proto || 'tcp';
       document.getElementById('listen').value = f.listen || '';
       document.getElementById('target').value = f.target || '';
       document.getElementById('description').value = f.desc || '';
@@ -217,15 +231,15 @@
 
     function openAdd() {
       current = null;
-      fill({ enabled: true });
+      fill({ proto: 'tcp', enabled: true });
       document.getElementById('modal-title').textContent = 'Add forward';
       box.dataset.mode = 'add';
       setEditable(true);
       showModal();
       document.getElementById('name').focus();
     }
-    function openDetail(name, listen, target, enabled, desc) {
-      current = { name, listen, target, enabled, desc };
+    function openDetail(name, proto, listen, target, enabled, desc) {
+      current = { name, proto, listen, target, enabled, desc };
       fill(current);
       document.getElementById('modal-title').textContent = 'Forward ' + name;
       box.dataset.mode = 'view';

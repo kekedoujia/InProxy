@@ -61,6 +61,10 @@
   label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
   input[type=text], select { padding: .5rem .6rem; border-radius: 8px; border: 1px solid #334155;
           background: #0f172a; color: #e2e8f0; font-size: .9rem; }
+  select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 1.9rem;
+          background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%2394a3b8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
+          background-repeat: no-repeat; background-position: right .6rem center; }
+  input[type=text]:focus, select:focus { outline: none; border-color: #3b82f6; }
   input:disabled, select:disabled { opacity: .6; cursor: default; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
   .fwd-head { display: flex; align-items: center; justify-content: space-between; margin: 1.1rem 0 .5rem; }

@@ -24,9 +24,9 @@ internal user ──────────►│                              
   - `self`: auto-generated self-signed cert (works for a bare IP; browser warning).
   - `file`: bring your own certificate.
 - **Path-prefix routing**, longest prefix wins; each route can independently **strip its prefix**.
-- **Raw TCP port forwarding** (separate "Port forwarding" admin page): map a public listen
-  port on this host to a `host:port` on an internal machine. Works for any TCP protocol
-  (SSH, RDP, databases, …); listeners start/stop the moment you save.
+- **L4 port forwarding** (separate "Port forwarding" admin page): map a public listen port on
+  this host to a `host:port` on an internal machine — **TCP, UDP, or TCP+UDP** (one record can
+  carry both). Any protocol (SSH, RDP, databases, DNS, WireGuard, …); listeners start/stop on save.
 - **Kernel DNAT** ("DNAT" admin page): destination-NAT a public port to an internal
   `host:port` via iptables — faster than userspace forwarding and supports **UDP**. Rules
   live in dedicated nat chains (`INPROXY_DNAT` / `INPROXY_POST`) so nothing else is touched;
@@ -127,7 +127,7 @@ Changes take effect immediately.
 | `tls.go`     | self-signed certificate generation (`self` mode) |
 | `config.go`  | route + forward models, thread-safe store, JSON persistence (auto-migrates the legacy array form), validation |
 | `proxy.go`   | reverse proxy construction, prefix stripping, forwarding headers |
-| `forward.go` | runtime TCP port forwarders: reconcile listeners on config change, pipe connections |
+| `forward.go` | runtime L4 forwarders: TCP relay + UDP datagram relay, reconcile listeners on change |
 | `dnat.go`    | runtime kernel DNAT: reconcile iptables nat chains on config change (needs CAP_NET_ADMIN) |
 | `domains.go` | SNI peek/route: TLS passthrough splicing + per-port listeners for domain routing |
 | `auth.go`    | IP allowlist + password login + signed session cookie |
