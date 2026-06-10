@@ -19,7 +19,7 @@
                border-bottom: 2px solid transparent; }
   nav.tabs a:hover { color: #e2e8f0; }
   nav.tabs a.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
-  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
   .msg { padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
   .notice { background: #064e3b; color: #6ee7b7; }
   .error  { background: #7f1d1d; color: #fca5a5; }
@@ -102,9 +102,9 @@
   </header>
   <nav class="tabs">
     <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">① DNAT</a>
-    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">② Domains</a>
-    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">③ Port forwarding</a>
-    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">④ HTTP service</a>
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">② HTTP service</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">③ Domains</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">④ Port forwarding</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
@@ -127,7 +127,7 @@
           <td data-label="Name">{{.Name}}</td>
           <td data-label="Proto">{{if .Proto}}{{.Proto}}{{else}}tcp{{end}}</td>
           <td data-label="External listen"><code>{{.Listen}}</code></td>
-          <td data-label="Internal target"><code>{{.Target}}</code></td>
+          <td data-label="Internal target"><code>{{.Target}}</code>{{if .ProxyProto}} <span class="badge" style="background:#3730a3;color:#c7d2fe">PROXY</span>{{end}}</td>
           <td data-label="Status">
             {{if eq .Status "running"}}<span class="badge on">running</span>
             {{else if eq .Status "disabled"}}<span class="badge off">disabled</span>
@@ -136,7 +136,7 @@
           <td data-label="Notes">{{.Description}}</td>
           <td data-label="Actions" class="actions">
             <button class="btn"
-               onclick='openDetail({{.Name}}, {{.Proto}}, {{.Listen}}, {{.Target}}, {{.Enabled}}, {{.Description}})'>Detail</button>
+               onclick='openDetail({{.Name}}, {{.Proto}}, {{.Listen}}, {{.Target}}, {{.Enabled}}, {{.Description}}, {{.ProxyProto}})'>Detail</button>
             <form method="post" action="/_admin/forwards/delete" onsubmit="return confirm('Delete forward {{.Name}} ?');">
               <input type="hidden" name="name" value="{{.Name}}">
               <button class="btn del" type="submit">Delete</button>
@@ -151,7 +151,7 @@
   </main>
 
   <!-- shared modal layer: add / view / edit a forward -->
-  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-overlay" id="modal">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
         <h2 id="modal-title">Add forward</h2>
@@ -195,6 +195,10 @@
               <input type="text" id="description" name="description" placeholder="e.g. SSH to lab box">
             </div>
             <div class="check">
+              <input type="checkbox" id="proxy_proto" name="proxy_proto">
+              <label for="proxy_proto">Send PROXY protocol v2 (TCP only; backend must accept it)</label>
+            </div>
+            <div class="check">
               <input type="checkbox" id="enabled" name="enabled" checked>
               <label for="enabled">Enabled</label>
             </div>
@@ -211,7 +215,7 @@
 
   <script>
     const box = document.getElementById('modal-box');
-    const FIELDS = ['name', 'proto', 'listen', 'target', 'description', 'enabled'];
+    const FIELDS = ['name', 'proto', 'listen', 'target', 'proxy_proto', 'description', 'enabled'];
     let current = null;
 
     function setEditable(on) {
@@ -223,6 +227,7 @@
       document.getElementById('proto').value = f.proto || 'tcp';
       document.getElementById('listen').value = f.listen || '';
       document.getElementById('target').value = f.target || '';
+      document.getElementById('proxy_proto').checked = !!f.proxyProto;
       document.getElementById('description').value = f.desc || '';
       document.getElementById('enabled').checked = !!f.enabled;
     }
@@ -238,8 +243,8 @@
       showModal();
       document.getElementById('name').focus();
     }
-    function openDetail(name, proto, listen, target, enabled, desc) {
-      current = { name, proto, listen, target, enabled, desc };
+    function openDetail(name, proto, listen, target, enabled, desc, proxyProto) {
+      current = { name, proto, listen, target, enabled, desc, proxyProto };
       fill(current);
       document.getElementById('modal-title').textContent = 'Forward ' + name;
       box.dataset.mode = 'view';
@@ -263,7 +268,7 @@
       document.getElementById('del_name').value = current.name;
       document.getElementById('delete-form').submit();
     }
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+    // modal closes only via the × button — prevents accidental dismissal
   </script>
 </body>
 </html>{{end}}

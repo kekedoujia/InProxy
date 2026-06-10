@@ -23,10 +23,13 @@ internal user ──────────►│                              
   - `auto`: Let's Encrypt automatic issuance (recommended when you have a domain; browser-trusted).
   - `self`: auto-generated self-signed cert (works for a bare IP; browser warning).
   - `file`: bring your own certificate.
-- **Path-prefix routing**, longest prefix wins; each route can independently **strip its prefix**.
+- **HTTP service** ("HTTP service" admin page): per public hostname, route by path prefix
+  (longest wins, each can strip its prefix) to internal HTTP backends. inproxy terminates TLS
+  with an automatic Let's Encrypt cert per domain. Multiple domains/paths may target the same backend.
 - **L4 port forwarding** (separate "Port forwarding" admin page): map a public listen port on
   this host to a `host:port` on an internal machine — **TCP, UDP, or TCP+UDP** (one record can
   carry both). Any protocol (SSH, RDP, databases, DNS, WireGuard, …); listeners start/stop on save.
+  Optional **PROXY protocol v2** (TCP) so the backend learns the real client IP (it must accept it).
 - **Kernel DNAT** ("DNAT" admin page): destination-NAT a public port to an internal
   `host:port` via iptables — faster than userspace forwarding and supports **UDP**. Rules
   live in dedicated nat chains (`INPROXY_DNAT` / `INPROXY_POST`) so nothing else is touched;

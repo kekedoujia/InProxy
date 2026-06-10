@@ -19,7 +19,7 @@
                border-bottom: 2px solid transparent; }
   nav.tabs a:hover { color: #e2e8f0; }
   nav.tabs a.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
-  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
   .msg { padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
   .notice { background: #064e3b; color: #6ee7b7; }
   .error  { background: #7f1d1d; color: #fca5a5; }
@@ -102,9 +102,9 @@
   </header>
   <nav class="tabs">
     <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">① DNAT</a>
-    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">② Domains</a>
-    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">③ Port forwarding</a>
-    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">④ HTTP service</a>
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">② HTTP service</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">③ Domains</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">④ Port forwarding</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
@@ -155,7 +155,7 @@
   </main>
 
   <!-- shared modal layer: add / view / edit a DNAT rule -->
-  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-overlay" id="modal">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
         <h2 id="modal-title">Add DNAT rule</h2>
@@ -270,7 +270,7 @@
       document.getElementById('del_name').value = current.name;
       document.getElementById('delete-form').submit();
     }
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+    // modal closes only via the × button — prevents accidental dismissal
   </script>
 </body>
 </html>{{end}}

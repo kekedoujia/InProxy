@@ -39,7 +39,7 @@ func (f *Forwarder) Apply(forwards []Forward) {
 	// stop listeners that are gone, disabled, or whose proto/addr/target changed
 	for name, l := range f.active {
 		w, ok := want[name]
-		if !ok || !w.Enabled || w.Proto != l.fwd.Proto || w.Listen != l.fwd.Listen || w.Target != l.fwd.Target {
+		if !ok || !w.Enabled || w.Proto != l.fwd.Proto || w.Listen != l.fwd.Listen || w.Target != l.fwd.Target || w.ProxyProto != l.fwd.ProxyProto {
 			l.stop()
 			delete(f.active, name)
 		}
@@ -151,6 +151,14 @@ func (l *fwdListener) handleTCP(client net.Conn) {
 		return
 	}
 	defer target.Close()
+
+	if l.fwd.ProxyProto {
+		if h := proxyProtoV2Header(client.RemoteAddr(), client.LocalAddr()); h != nil {
+			if _, err := target.Write(h); err != nil {
+				return
+			}
+		}
+	}
 
 	done := make(chan struct{}, 2)
 	pipe := func(dst, src net.Conn) {

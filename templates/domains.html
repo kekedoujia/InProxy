@@ -19,7 +19,7 @@
                border-bottom: 2px solid transparent; }
   nav.tabs a:hover { color: #e2e8f0; }
   nav.tabs a.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
-  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
   .msg { padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
   .notice { background: #064e3b; color: #6ee7b7; }
   .error  { background: #7f1d1d; color: #fca5a5; }
@@ -35,6 +35,8 @@
   .pass { background: #422006; color: #fed7aa; }
   .off { background: #475569; color: #cbd5e1; }
   .fwd-line { margin: .15rem 0; }
+  .rnote { color: #64748b; font-size: .8rem; }
+  tr.grp td { border-top: 2px solid #64748b; } /* thick divider between domains */
   .actions { white-space: nowrap; }
   .actions > * + * { margin-left: .5rem; }
   .actions form { display: inline-block; margin: 0; }
@@ -90,9 +92,9 @@
   </header>
   <nav class="tabs">
     <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">① DNAT</a>
-    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">② Domains</a>
-    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">③ Port forwarding</a>
-    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">④ HTTP service</a>
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">② HTTP service</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">③ Domains</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">④ Port forwarding</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
@@ -110,38 +112,53 @@
 
     <table>
       <thead>
-        <tr><th style="width:38%">Domain</th><th>Port forwards</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th style="width:23%">Domain</th><th style="width:10%">Port</th><th>Target</th><th style="width:14%">Mode</th><th style="width:20%">Notes</th><th style="width:130px">Actions</th></tr>
       </thead>
       <tbody>
-        {{range .Domains}}
-        <tr>
-          <td><code>{{.Host}}</code></td>
-          <td>
-            {{range .Forwards}}
-            <div class="fwd-line">
-              <code>:{{.Port}}</code> → <code>{{.Target}}</code>
-              {{if .ManageCert}}<span class="badge term">terminate</span>{{else}}<span class="badge pass">passthrough</span>{{end}}
-              {{if not .Enabled}}<span class="badge off">disabled</span>{{end}}
-            </div>
-            {{else}}<span style="color:#64748b">(no ports)</span>{{end}}
-          </td>
-          <td>{{.Description}}</td>
+        {{range $i, $d := .Domains}}
+        {{$n := len $d.Forwards}}
+        {{if eq $n 0}}
+        <tr{{if gt $i 0}} class="grp"{{end}}>
+          <td><code>{{$d.Host}}</code>{{if $d.Description}}<div class="rnote">{{$d.Description}}</div>{{end}}</td>
+          <td colspan="4" style="color:#64748b">(no ports)</td>
           <td class="actions">
-            <button class="btn" onclick="openDetail('{{.Host}}')">Detail</button>
-            <form method="post" action="/_admin/domains/delete" onsubmit="return confirm('Delete domain {{.Host}} ?');">
-              <input type="hidden" name="host" value="{{.Host}}">
+            <button class="btn" onclick="openDetail('{{$d.Host}}')">Detail</button>
+            <form method="post" action="/_admin/domains/delete" onsubmit="return confirm('Delete domain {{$d.Host}} ?');">
+              <input type="hidden" name="host" value="{{$d.Host}}">
               <button class="btn del" type="submit">Delete</button>
             </form>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="4" class="empty">No domains yet. Use “Add domain” to create one.</td></tr>
+        {{range $j, $f := $d.Forwards}}
+        <tr{{if and (eq $j 0) (gt $i 0)}} class="grp"{{end}}>
+          {{if eq $j 0}}<td rowspan="{{$n}}"><code>{{$d.Host}}</code>{{if $d.Description}}<div class="rnote">{{$d.Description}}</div>{{end}}</td>{{end}}
+          <td><code>:{{$f.Port}}</code></td>
+          <td><code>{{$f.Target}}</code></td>
+          <td>
+            {{if $f.ManageCert}}<span class="badge term">terminate</span>{{else}}<span class="badge pass">passthrough</span>{{end}}
+            {{if $f.ProxyProto}}<span class="badge" style="background:#3730a3;color:#c7d2fe">PROXY</span>{{end}}
+            {{if not $f.Enabled}}<span class="badge off">disabled</span>{{end}}
+          </td>
+          <td class="rnote">{{$f.Description}}</td>
+          {{if eq $j 0}}<td rowspan="{{$n}}" class="actions">
+            <button class="btn" onclick="openDetail('{{$d.Host}}')">Detail</button>
+            <form method="post" action="/_admin/domains/delete" onsubmit="return confirm('Delete domain {{$d.Host}} ?');">
+              <input type="hidden" name="host" value="{{$d.Host}}">
+              <button class="btn del" type="submit">Delete</button>
+            </form>
+          </td>{{end}}
+        </tr>
+        {{end}}
+        {{end}}
+        {{else}}
+        <tr><td colspan="6" class="empty">No domains yet. Use “Add domain” to create one.</td></tr>
         {{end}}
       </tbody>
     </table>
   </main>
 
-  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-overlay" id="modal">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
         <h2 id="modal-title">Add domain</h2>
@@ -194,8 +211,10 @@
         + '<input class="f-port" type="text" placeholder="443" style="width:74px">'
         + '<input class="f-target" type="text" placeholder="10.8.0.60:18443" style="flex:1;min-width:150px">'
         + '<select class="f-mode" onchange="syncRow(this)"><option value="terminate">terminate + cert</option><option value="passthrough">passthrough</option></select>'
+        + '<input class="f-note" type="text" placeholder="notes" style="flex:1;min-width:90px" oninput="this.title=this.value">'
         + '<span class="ck f-tls-wrap"><input type="checkbox" class="f-btls"><label>backend https</label></span>'
         + '<span class="ck f-tls-wrap"><input type="checkbox" class="f-skip"><label>skip verify</label></span>'
+        + '<span class="ck f-pp-wrap"><input type="checkbox" class="f-pp"><label>PROXY proto</label></span>'
         + '<span class="ck"><input type="checkbox" class="f-en" checked><label>enabled</label></span>'
         + '<button type="button" class="btn del" onclick="this.closest(\'.frow\').remove()">✕</button>'
         + '</div>';
@@ -204,6 +223,7 @@
       const row = sel.closest('.frow');
       const pass = sel.value === 'passthrough';
       row.querySelectorAll('.f-tls-wrap').forEach(e => e.style.display = pass ? 'none' : 'flex');
+      row.querySelectorAll('.f-pp-wrap').forEach(e => e.style.display = pass ? 'flex' : 'none');
     }
     function addRow(f) {
       const tmp = document.createElement('div');
@@ -216,6 +236,8 @@
       row.querySelector('.f-mode').value = (f.manage_cert === false) ? 'passthrough' : 'terminate';
       row.querySelector('.f-btls').checked = !!f.backend_tls;
       row.querySelector('.f-skip').checked = !!f.skip_verify;
+      row.querySelector('.f-pp').checked = !!f.proxy_proto;
+      row.querySelector('.f-note').value = f.description || '';
       row.querySelector('.f-en').checked = (f.enabled === undefined) ? true : !!f.enabled;
       syncRow(row.querySelector('.f-mode'));
       return row;
@@ -231,6 +253,8 @@
           manage_cert: mode === 'terminate',
           backend_tls: row.querySelector('.f-btls').checked,
           skip_verify: row.querySelector('.f-skip').checked,
+          proxy_proto: row.querySelector('.f-pp').checked,
+          description: row.querySelector('.f-note').value.trim(),
           enabled: row.querySelector('.f-en').checked
         });
       });
@@ -291,7 +315,7 @@
     document.getElementById('dom-form').addEventListener('submit', function() {
       document.getElementById('forwards_json').value = JSON.stringify(collectForwards());
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+    // modal closes only via the × button — prevents accidental dismissal
   </script>
 </body>
 </html>{{end}}

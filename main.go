@@ -45,7 +45,7 @@ func main() {
 		log.Fatal("ADMIN_PASSWORD must be set to the admin UI password")
 	}
 
-	store, err := NewStore(configPath)
+	store, err := NewStore(configPath, externalHost)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
@@ -74,21 +74,24 @@ func main() {
 		mainPort = p
 	}
 
-	// External proxy handler: terminate-mode domains and path routes (the admin UI
-	// is never exposed). Passthrough domains are diverted earlier at the TLS layer.
+	// External proxy handler (admin UI is never exposed; passthrough domains are
+	// diverted earlier at the TLS layer). Per host: HTTP service path routes win,
+	// then a terminate-mode Domain (whole-site) is the fallback.
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_healthz" {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("ok"))
 			return
 		}
-		// a whole hostname mapped to one backend (terminate mode) wins over path routes
-		if cp, ok := store.MatchDomain(hostOnly(r.Host), mainPort); ok && cp.ManageCert {
-			cp.serve(w, r)
+		host := hostOnly(r.Host)
+		// HTTP service: a path-prefix route under this host (more specific) wins
+		if c, ok := store.MatchSite(host, r.URL.Path); ok {
+			c.serve(w, r)
 			return
 		}
-		if c, ok := store.Match(r.URL.Path); ok {
-			c.serve(w, r)
+		// Domains terminate: whole-site fallback for this host
+		if cp, ok := store.MatchDomain(host, mainPort); ok && cp.ManageCert {
+			cp.serve(w, r)
 			return
 		}
 		http.NotFound(w, r)
@@ -110,7 +113,7 @@ func main() {
 			// issues certs for them on first request. Passthrough domains are
 			// excluded — the backend owns their cert.
 			HostPolicy: func(_ context.Context, host string) error {
-				if strings.EqualFold(host, externalHost) || store.IsTerminateHost(host) {
+				if strings.EqualFold(host, externalHost) || store.IsHTTPHost(host) || store.IsTerminateHost(host) {
 					return nil
 				}
 				return fmt.Errorf("acme: host %q is not configured", host)
@@ -177,7 +180,7 @@ func main() {
 	}
 	proxySNI := newSNIListener(rawProxyLn, func(host string) sniDecision {
 		if cp, ok := store.MatchDomain(host, mainPort); ok && !cp.ManageCert {
-			return sniDecision{action: actPassthrough, target: cp.Target}
+			return sniDecision{action: actPassthrough, target: cp.Target, proxyProto: cp.ProxyProto}
 		}
 		return sniDecision{action: actAccept} // terminate domains / tools / ACME fall through
 	})

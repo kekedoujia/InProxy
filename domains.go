@@ -26,8 +26,34 @@ const (
 )
 
 type sniDecision struct {
-	action int
-	target string // backend "ip:port" for actPassthrough
+	action     int
+	target     string // backend "ip:port" for actPassthrough
+	proxyProto bool   // prepend a PROXY protocol v2 header to the backend
+}
+
+// proxyProtoV2Header builds a PROXY protocol v2 header announcing the real client
+// (src) and the address it connected to (dst), for the backend to consume.
+// Returns nil if the addresses aren't usable TCP addrs.
+func proxyProtoV2Header(src, dst net.Addr) []byte {
+	s, _ := src.(*net.TCPAddr)
+	d, _ := dst.(*net.TCPAddr)
+	if s == nil || d == nil {
+		return nil
+	}
+	buf := []byte{0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A} // signature
+	buf = append(buf, 0x21)                                                              // version 2 + PROXY command
+	s4, d4 := s.IP.To4(), d.IP.To4()
+	if s4 != nil && d4 != nil {
+		buf = append(buf, 0x11, 0x00, 0x0C) // AF_INET + STREAM, len 12
+		buf = append(buf, s4...)
+		buf = append(buf, d4...)
+	} else {
+		buf = append(buf, 0x21, 0x00, 0x24) // AF_INET6 + STREAM, len 36
+		buf = append(buf, s.IP.To16()...)
+		buf = append(buf, d.IP.To16()...)
+	}
+	buf = append(buf, byte(s.Port>>8), byte(s.Port), byte(d.Port>>8), byte(d.Port))
+	return buf
 }
 
 // errPeeked aborts the throwaway handshake once the SNI has been captured.
@@ -113,7 +139,7 @@ func (l *sniListener) handle(c net.Conn) {
 	_ = c.SetReadDeadline(time.Time{})
 	switch d := l.decide(sni); d.action {
 	case actPassthrough:
-		spliceTo(c, recorded, d.target)
+		spliceTo(c, recorded, d.target, d.proxyProto)
 	case actDrop:
 		_ = c.Close()
 	default:
@@ -144,7 +170,7 @@ func (l *sniListener) Addr() net.Addr { return l.inner.Addr() }
 
 // spliceTo pipes a passthrough connection to the backend, replaying the peeked
 // ClientHello first so the TLS handshake completes end-to-end with the backend.
-func spliceTo(client net.Conn, prefix []byte, backendAddr string) {
+func spliceTo(client net.Conn, prefix []byte, backendAddr string, sendProxy bool) {
 	defer client.Close()
 	backend, err := net.DialTimeout("tcp", backendAddr, 10*time.Second)
 	if err != nil {
@@ -152,6 +178,13 @@ func spliceTo(client net.Conn, prefix []byte, backendAddr string) {
 		return
 	}
 	defer backend.Close()
+	if sendProxy {
+		if h := proxyProtoV2Header(client.RemoteAddr(), client.LocalAddr()); h != nil {
+			if _, err := backend.Write(h); err != nil {
+				return
+			}
+		}
+	}
 	if len(prefix) > 0 {
 		if _, err := backend.Write(prefix); err != nil {
 			return
@@ -238,7 +271,7 @@ func (r *DomainRouter) startPort(p int) (*portServer, error) {
 			}
 			return sniDecision{action: actAccept}
 		}
-		return sniDecision{action: actPassthrough, target: cp.Target}
+		return sniDecision{action: actPassthrough, target: cp.Target, proxyProto: cp.ProxyProto}
 	}
 	ln := newSNIListener(raw, decide)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

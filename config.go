@@ -16,7 +16,7 @@ import (
 	"sync"
 )
 
-// Route maps a public path prefix to an internal backend service.
+// Route maps a public path prefix to an internal backend service (under one HTTPSite).
 type Route struct {
 	Prefix        string `json:"prefix"`         // public prefix, e.g. "serviceA" (no leading slash)
 	Target        string `json:"target"`         // backend address, e.g. "http://10.8.0.5:8080"
@@ -26,14 +26,24 @@ type Route struct {
 	MaxConcurrent int    `json:"max_concurrent"` // max simultaneous forwarded requests (0 = unlimited)
 }
 
+// HTTPSite is one public hostname served as an HTTP reverse proxy, with a set of
+// path-prefix routes under it. inproxy terminates TLS (automatic Let's Encrypt
+// cert for Host) and reverse-proxies each prefix to its backend.
+type HTTPSite struct {
+	Host        string  `json:"host"`        // public FQDN, e.g. "tools.aperture-x.com"
+	Description string  `json:"description"` // notes
+	Routes      []Route `json:"routes"`      // path-prefix routes under this host
+}
+
 // Forward is a raw L4 port forward: a public listen port whose connections are
 // piped to an internal host:port. Carries any TCP protocol (SSH, RDP, databases)
 // or UDP datagrams (DNS, WireGuard, syslog, ...) depending on Proto.
 type Forward struct {
 	Name        string `json:"name"`        // unique identifier
-	Proto       string `json:"proto"`       // "tcp" | "udp" (empty = tcp, legacy)
+	Proto       string `json:"proto"`       // "tcp" | "udp" | "tcp+udp" (empty = tcp, legacy)
 	Listen      string `json:"listen"`      // external listen addr, e.g. ":2222" or "0.0.0.0:2222"
 	Target      string `json:"target"`      // internal host:port, e.g. "10.8.0.5:22"
+	ProxyProto  bool   `json:"proxy_proto"` // prepend a PROXY protocol v2 header (TCP only) so the backend learns the real client IP
 	Description string `json:"description"` // notes
 	Enabled     bool   `json:"enabled"`     // whether the forward is active
 }
@@ -57,12 +67,14 @@ type DNATRule struct {
 // reverse-proxies to the backend; when false, inproxy passes the TLS connection
 // through to the backend untouched (the backend presents its own certificate).
 type PortForward struct {
-	Port       int  `json:"port"`        // public port, e.g. 443
-	Target     string `json:"target"`    // internal "ip:port", e.g. "10.8.0.60:18443"
-	ManageCert bool `json:"manage_cert"` // true: terminate + Let's Encrypt; false: TLS passthrough
-	BackendTLS bool `json:"backend_tls"` // terminate mode: backend speaks https (else http)
-	SkipVerify bool `json:"skip_verify"` // terminate + backend_tls: skip backend cert verification
-	Enabled    bool `json:"enabled"`     // whether this mapping is active
+	Port        int    `json:"port"`        // public port, e.g. 443
+	Target      string `json:"target"`      // internal "ip:port", e.g. "10.8.0.60:18443"
+	ManageCert  bool   `json:"manage_cert"` // true: terminate + Let's Encrypt; false: TLS passthrough
+	BackendTLS  bool   `json:"backend_tls"` // terminate mode: backend speaks https (else http)
+	SkipVerify  bool   `json:"skip_verify"` // terminate + backend_tls: skip backend cert verification
+	ProxyProto  bool   `json:"proxy_proto"` // passthrough: prepend a PROXY protocol v2 header so the backend learns the real client IP
+	Description string `json:"description"` // notes
+	Enabled     bool   `json:"enabled"`     // whether this mapping is active
 }
 
 // Domain is one public hostname (matched by TLS SNI) with a set of per-port
@@ -84,7 +96,7 @@ type compiledPF struct {
 // configFile is the on-disk shape. The first release stored a bare JSON array of
 // routes; loadConfig still accepts that and migrates it into this object.
 type configFile struct {
-	Routes   []Route    `json:"routes"`
+	Sites    []HTTPSite `json:"sites"`
 	Forwards []Forward  `json:"forwards"`
 	DNAT     []DNATRule `json:"dnat"`
 	Domains  []Domain   `json:"domains"`
@@ -105,39 +117,41 @@ var reserved = map[string]bool{"_admin": true, "_healthz": true}
 
 // Store holds all routes in a thread-safe way and persists them to a JSON file.
 type Store struct {
-	mu          sync.RWMutex
-	path        string
-	routes      []Route
-	forwards    []Forward
-	dnat        []DNATRule
-	domains     []Domain
-	compiled    []compiledRoute                // routes, longest prefix first
-	compiledDom map[int]map[string]*compiledPF // port -> lower-cased host -> rule
-	onForward   func(forwards []Forward)       // notified after forwards change (set by main)
-	onDNAT      func(rules []DNATRule)         // notified after DNAT rules change (set by main)
-	onDomain    func()                         // notified after domains change (set by main)
+	mu            sync.RWMutex
+	path          string
+	sites         []HTTPSite
+	forwards      []Forward
+	dnat          []DNATRule
+	domains       []Domain
+	compiledSites map[string][]compiledRoute     // lower-host -> routes, longest prefix first
+	compiledDom   map[int]map[string]*compiledPF // port -> lower-cased host -> rule
+	onForward     func(forwards []Forward)       // notified after forwards change (set by main)
+	onDNAT        func(rules []DNATRule)         // notified after DNAT rules change (set by main)
+	onDomain      func()                         // notified after domains change (set by main)
 }
 
 // NewStore loads the config from disk (creating an empty one if missing).
-func NewStore(path string) (*Store, error) {
+// defaultHost is the hostname legacy flat path-routes are migrated under (the
+// main EXTERNAL_HOST, e.g. tools.aperture-x.com).
+func NewStore(path, defaultHost string) (*Store, error) {
 	s := &Store{path: path}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create config dir: %w", err)
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		s.routes, s.forwards, s.dnat, s.domains = []Route{}, []Forward{}, []DNATRule{}, []Domain{}
+		s.sites, s.forwards, s.dnat, s.domains = []HTTPSite{}, []Forward{}, []DNATRule{}, []Domain{}
 		if err := s.persistLocked(); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	} else if len(data) > 0 {
-		routes, forwards, dnat, domains, err := parseConfig(data)
+		sites, forwards, dnat, domains, err := parseConfig(data, defaultHost)
 		if err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", path, err)
 		}
-		s.routes, s.forwards, s.dnat, s.domains = routes, forwards, dnat, domains
+		s.sites, s.forwards, s.dnat, s.domains = sites, forwards, dnat, domains
 	}
 	if err := s.recompileLocked(); err != nil {
 		return nil, err
@@ -145,20 +159,29 @@ func NewStore(path string) (*Store, error) {
 	return s, nil
 }
 
+// migrateRoutes wraps legacy flat path-routes into a single HTTPSite under host.
+func migrateRoutes(routes []Route, host string) []HTTPSite {
+	if len(routes) == 0 || host == "" {
+		return []HTTPSite{}
+	}
+	return []HTTPSite{{Host: host, Routes: routes}}
+}
+
 // parseConfig accepts the object form, the original bare-array-of-routes form,
 // and the intermediate form that had a flat "vhosts" list (migrated into the
 // nested "domains" model: each old vhost becomes a domain with one 443 forward).
-func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []Domain, error) {
+func parseConfig(data []byte, defaultHost string) ([]HTTPSite, []Forward, []DNATRule, []Domain, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if strings.HasPrefix(trimmed, "[") { // legacy: bare array of routes
 		var routes []Route
 		if err := json.Unmarshal(data, &routes); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		return routes, []Forward{}, []DNATRule{}, []Domain{}, nil
+		return migrateRoutes(routes, defaultHost), []Forward{}, []DNATRule{}, []Domain{}, nil
 	}
 	var cf struct {
-		Routes   []Route    `json:"routes"`
+		Sites    []HTTPSite `json:"sites"`
+		Routes   []Route    `json:"routes"` // legacy flat path-routes (pre-multi-domain)
 		Forwards []Forward  `json:"forwards"`
 		DNAT     []DNATRule `json:"dnat"`
 		Domains  []Domain   `json:"domains"`
@@ -173,12 +196,19 @@ func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []Domain, error) 
 	if err := json.Unmarshal(data, &cf); err != nil {
 		return nil, nil, nil, nil, err
 	}
+	sites := cf.Sites
+	if sites == nil {
+		sites = []HTTPSite{}
+	}
+	if len(sites) == 0 && len(cf.Routes) > 0 { // migrate legacy flat routes -> one site
+		sites = migrateRoutes(cf.Routes, defaultHost)
+	}
 	domains := cf.Domains
 	if domains == nil {
 		domains = []Domain{}
 	}
 	for _, v := range cf.VHosts { // migrate legacy flat vhosts -> nested domains
-		host, port := v.Target, "443"
+		host := v.Target
 		https := false
 		if u, err := url.Parse(v.Target); err == nil && u.Host != "" {
 			host = u.Host
@@ -192,10 +222,6 @@ func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []Domain, error) 
 				BackendTLS: https, SkipVerify: v.SkipVerify, Enabled: v.Enabled,
 			}},
 		})
-		_ = port
-	}
-	if cf.Routes == nil {
-		cf.Routes = []Route{}
 	}
 	if cf.Forwards == nil {
 		cf.Forwards = []Forward{}
@@ -203,7 +229,7 @@ func parseConfig(data []byte) ([]Route, []Forward, []DNATRule, []Domain, error) 
 	if cf.DNAT == nil {
 		cf.DNAT = []DNATRule{}
 	}
-	return cf.Routes, cf.Forwards, cf.DNAT, domains, nil
+	return sites, cf.Forwards, cf.DNAT, domains, nil
 }
 
 // SetDNATListener registers a callback invoked (outside the lock) whenever the
@@ -230,21 +256,23 @@ func (s *Store) SetForwardListener(fn func([]Forward)) {
 	s.mu.Unlock()
 }
 
-// List returns a copy of the routes.
-func (s *Store) List() []Route {
+// ListSites returns a copy of the configured HTTP sites.
+func (s *Store) ListSites() []HTTPSite {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Route, len(s.routes))
-	copy(out, s.routes)
+	out := make([]HTTPSite, len(s.sites))
+	copy(out, s.sites)
 	return out
 }
 
-// Match returns the enabled route with the longest matching prefix.
-func (s *Store) Match(path string) (*compiledRoute, bool) {
+// MatchSite returns the enabled route under host with the longest matching
+// prefix (case-insensitive host).
+func (s *Store) MatchSite(host, path string) (*compiledRoute, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for i := range s.compiled {
-		c := &s.compiled[i]
+	routes := s.compiledSites[strings.ToLower(host)]
+	for i := range routes {
+		c := &routes[i]
 		p := "/" + c.Prefix
 		if path == p || strings.HasPrefix(path, p+"/") {
 			return c, true
@@ -253,63 +281,95 @@ func (s *Store) Match(path string) (*compiledRoute, bool) {
 	return nil, false
 }
 
-// Upsert adds or updates a route (unique by prefix). Empty oldPrefix means add.
-func (s *Store) Upsert(oldPrefix string, r Route) error {
-	if err := validate(r); err != nil {
+// IsHTTPHost reports whether host is a configured HTTP site (so the ACME host
+// policy obtains a certificate for it — these sites are always TLS-terminated).
+func (s *Store) IsHTTPHost(host string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.compiledSites[strings.ToLower(host)]
+	return ok
+}
+
+// UpsertSite adds or updates an HTTP site and all its routes (unique by host).
+// Empty oldHost = add.
+func (s *Store) UpsertSite(oldHost string, site HTTPSite) error {
+	if err := validateSite(&site); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	idx := -1
-	for i, existing := range s.routes {
-		if existing.Prefix == r.Prefix {
+	for i, e := range s.sites {
+		if strings.EqualFold(e.Host, site.Host) {
 			idx = i
 		}
 	}
-	if oldPrefix == "" { // add
+	if oldHost == "" { // add
 		if idx >= 0 {
-			return fmt.Errorf("prefix %q already exists", r.Prefix)
+			return fmt.Errorf("site %q already exists", site.Host)
 		}
-		s.routes = append(s.routes, r)
+		s.sites = append(s.sites, site)
 	} else { // update
-		// when the prefix changed, make sure the new one does not collide
-		if oldPrefix != r.Prefix && idx >= 0 {
-			return fmt.Errorf("prefix %q already exists", r.Prefix)
+		if !strings.EqualFold(oldHost, site.Host) && idx >= 0 {
+			return fmt.Errorf("site %q already exists", site.Host)
 		}
 		found := false
-		for i := range s.routes {
-			if s.routes[i].Prefix == oldPrefix {
-				s.routes[i] = r
+		for i := range s.sites {
+			if strings.EqualFold(s.sites[i].Host, oldHost) {
+				s.sites[i] = site
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("prefix %q to update does not exist", oldPrefix)
+			return fmt.Errorf("site %q to update does not exist", oldHost)
 		}
 	}
 	return s.commitLocked()
 }
 
-// Delete removes a route.
-func (s *Store) Delete(prefix string) error {
+// DeleteSite removes an HTTP site (and all its routes) by host.
+func (s *Store) DeleteSite(host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.routes[:0]
+	out := s.sites[:0]
 	removed := false
-	for _, r := range s.routes {
-		if r.Prefix == prefix {
+	for _, st := range s.sites {
+		if strings.EqualFold(st.Host, host) {
 			removed = true
 			continue
 		}
-		out = append(out, r)
+		out = append(out, st)
 	}
 	if !removed {
-		return fmt.Errorf("prefix %q does not exist", prefix)
+		return fmt.Errorf("site %q does not exist", host)
 	}
-	s.routes = out
+	s.sites = out
 	return s.commitLocked()
+}
+
+// validateSite checks and normalizes an HTTP site and its routes in place.
+func validateSite(site *HTTPSite) error {
+	site.Host = strings.TrimSpace(strings.ToLower(site.Host))
+	if !hostPattern.MatchString(site.Host) {
+		return errors.New("host must be a valid domain name, e.g. tools.example.com")
+	}
+	site.Description = strings.TrimSpace(site.Description)
+	seen := map[string]bool{}
+	for i := range site.Routes {
+		r := &site.Routes[i]
+		r.Prefix = strings.Trim(strings.TrimSpace(r.Prefix), "/")
+		r.Target = strings.TrimSpace(r.Target)
+		r.Description = strings.TrimSpace(r.Description)
+		if err := validate(*r); err != nil {
+			return err
+		}
+		if seen[r.Prefix] {
+			return fmt.Errorf("duplicate path prefix %q for this domain", r.Prefix)
+		}
+		seen[r.Prefix] = true
+	}
+	return nil
 }
 
 func validate(r Route) error {
@@ -344,26 +404,30 @@ func (s *Store) commitLocked() error {
 }
 
 func (s *Store) recompileLocked() error {
-	compiled := make([]compiledRoute, 0, len(s.routes))
-	for _, r := range s.routes {
-		if !r.Enabled {
-			continue
+	sites := make(map[string][]compiledRoute)
+	for _, st := range s.sites {
+		var crs []compiledRoute
+		for _, r := range st.Routes {
+			if !r.Enabled {
+				continue
+			}
+			p, err := buildProxy(r)
+			if err != nil {
+				return fmt.Errorf("site %q route %q: %w", st.Host, r.Prefix, err)
+			}
+			cr := compiledRoute{Route: r, proxy: p}
+			if r.MaxConcurrent > 0 {
+				cr.limiter = make(chan struct{}, r.MaxConcurrent)
+			}
+			crs = append(crs, cr)
 		}
-		p, err := buildProxy(r)
-		if err != nil {
-			return fmt.Errorf("route %q: %w", r.Prefix, err)
-		}
-		cr := compiledRoute{Route: r, proxy: p}
-		if r.MaxConcurrent > 0 {
-			cr.limiter = make(chan struct{}, r.MaxConcurrent)
-		}
-		compiled = append(compiled, cr)
+		// longest prefix first, so /a does not steal requests meant for /ab
+		sort.SliceStable(crs, func(i, j int) bool {
+			return len(crs[i].Prefix) > len(crs[j].Prefix)
+		})
+		sites[strings.ToLower(st.Host)] = crs // entry exists even with no routes (still needs a cert)
 	}
-	// longest prefix first, so /a does not steal requests meant for /ab
-	sort.SliceStable(compiled, func(i, j int) bool {
-		return len(compiled[i].Prefix) > len(compiled[j].Prefix)
-	})
-	s.compiled = compiled
+	s.compiledSites = sites
 
 	dom := make(map[int]map[string]*compiledPF)
 	for _, d := range s.domains {
@@ -438,9 +502,9 @@ func (s *Store) DomainPorts() []int {
 }
 
 func (s *Store) persistLocked() error {
-	routes, forwards, dnat, domains := s.routes, s.forwards, s.dnat, s.domains
-	if routes == nil {
-		routes = []Route{}
+	sites, forwards, dnat, domains := s.sites, s.forwards, s.dnat, s.domains
+	if sites == nil {
+		sites = []HTTPSite{}
 	}
 	if forwards == nil {
 		forwards = []Forward{}
@@ -451,7 +515,7 @@ func (s *Store) persistLocked() error {
 	if domains == nil {
 		domains = []Domain{}
 	}
-	data, err := json.MarshalIndent(configFile{Routes: routes, Forwards: forwards, DNAT: dnat, Domains: domains}, "", "  ")
+	data, err := json.MarshalIndent(configFile{Sites: sites, Forwards: forwards, DNAT: dnat, Domains: domains}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -793,6 +857,7 @@ func validateDomain(d *Domain) error {
 	seen := map[int]bool{}
 	for i := range d.Forwards {
 		f := &d.Forwards[i]
+		f.Description = strings.TrimSpace(f.Description)
 		if f.Port < 1 || f.Port > 65535 {
 			return fmt.Errorf("public port must be between 1 and 65535 (got %d)", f.Port)
 		}

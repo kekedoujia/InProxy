@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>inproxy admin</title>
+<title>inproxy admin — HTTP service</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -19,23 +19,25 @@
                border-bottom: 2px solid transparent; }
   nav.tabs a:hover { color: #e2e8f0; }
   nav.tabs a.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
-  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
   .msg { padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
   .notice { background: #064e3b; color: #6ee7b7; }
   .error  { background: #7f1d1d; color: #fca5a5; }
   .table-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .9rem; }
   .table-head h2 { font-size: .95rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  .lead { color: #64748b; font-size: .82rem; margin: -.4rem 0 1rem; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: .9rem; }
-  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; }
+  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #334155; vertical-align: top; }
   th { color: #94a3b8; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
   code { background: #1e293b; padding: .15rem .4rem; border-radius: 5px; }
-  .badge { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px; }
-  .on { background: #065f46; color: #6ee7b7; }
+  .badge { font-size: .68rem; padding: .1rem .45rem; border-radius: 999px; }
   .off { background: #475569; color: #cbd5e1; }
+  .fwd-line { margin: .15rem 0; }
+  .rnote { color: #64748b; font-size: .8rem; }
+  tr.grp td { border-top: 2px solid #64748b; } /* thick divider between domains */
   .actions { white-space: nowrap; }
   .actions > * + * { margin-left: .5rem; }
-  .actions form { display: inline-block; margin: 0; vertical-align: middle; }
-  .actions .btn { vertical-align: middle; }
+  .actions form { display: inline-block; margin: 0; }
   .btn { font-size: .8rem; padding: .35rem .75rem; border-radius: 6px; border: 1px solid #334155;
          background: #1e293b; color: #e2e8f0; cursor: pointer; text-decoration: none;
          white-space: nowrap; line-height: 1.4; }
@@ -44,12 +46,11 @@
   .btn.del { color: #fca5a5; border-color: #7f1d1d; }
   .empty { color: #64748b; padding: 1rem 0; }
 
-  /* modal layer */
   .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, .7);
        display: none; align-items: flex-start; justify-content: center; padding: 4rem 1rem; z-index: 50; }
   .modal-overlay.open { display: flex; }
   .modal { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-       width: 100%; max-width: 560px; max-height: 85vh; overflow: auto; }
+       width: 100%; max-width: 1040px; max-height: 88vh; overflow: auto; }
   .modal-head { display: flex; align-items: center; gap: .75rem; padding: 1rem 1.25rem;
        border-bottom: 1px solid #334155; }
   .modal-head h2 { font-size: 1rem; margin: 0; flex: 1; }
@@ -57,39 +58,27 @@
   .modal-close { background: none; border: 0; color: #94a3b8; font-size: 1.5rem;
        line-height: 1; cursor: pointer; padding: 0 .25rem; }
   .modal-body { padding: 1.25rem; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  .grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: .8rem; margin-bottom: .35rem; color: #94a3b8; }
-  input[type=text] { width: 100%; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #334155;
-          background: #0f172a; color: #e2e8f0; font-size: .95rem; }
-  input:disabled { opacity: .65; cursor: default; }
-  .check { display: flex; align-items: center; gap: .5rem; margin-top: 1.6rem; }
-  .check label { margin: 0; }
+  input[type=text], select { padding: .5rem .6rem; border-radius: 8px; border: 1px solid #334155;
+          background: #0f172a; color: #e2e8f0; font-size: .9rem; }
+  input[type=text]:focus { outline: none; border-color: #3b82f6; }
+  input:disabled { opacity: .6; cursor: default; }
   .hint { color: #64748b; font-size: .75rem; margin-top: .3rem; }
-  /* mode-driven button visibility */
+  .fwd-head { display: flex; align-items: center; justify-content: space-between; margin: 1.1rem 0 .5rem; }
+  .fwd-head h3 { font-size: .8rem; margin: 0; color: #94a3b8; text-transform: uppercase; letter-spacing: .03em; }
+  .rtbl { width: 100%; border-collapse: collapse; margin-bottom: .4rem; }
+  .rtbl th { text-align: left; font-size: .72rem; color: #94a3b8; text-transform: uppercase;
+             letter-spacing: .03em; padding: .25rem .4rem; font-weight: 600; border-bottom: 1px solid #334155; }
+  .rtbl td { padding: .3rem .4rem; vertical-align: middle; }
+  .rtbl th.c, .rtbl td.c { text-align: center; }
+  .rtbl input[type=text] { width: 100%; }
+  .rtbl input[type=checkbox] { width: 16px; height: 16px; }
+  .rtbl .btn.rm { color: #fca5a5; border-color: #7f1d1d; padding: .3rem .5rem; }
   .modal[data-mode="view"] .act-edit { display: none; }
   .modal[data-mode="edit"] .act-view,
   .modal[data-mode="add"]  .act-view { display: none; }
 
-  /* phones / narrow screens: stack the table into per-route cards */
-  @media (max-width: 640px) {
-    main { padding: 1rem; }
-    header { padding: .9rem 1rem; }
-    table { font-size: .95rem; }
-    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    table, tbody, tr, td { display: block; width: 100%; }
-    tr { border: 1px solid #334155; border-radius: 10px; margin-bottom: 1rem; padding: .35rem .9rem; }
-    td { border: 0; padding: .45rem 0; }
-    td::before { content: attr(data-label); display: block; color: #94a3b8;
-         font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; margin-bottom: .2rem; }
-    td.empty::before { content: none; }
-    .actions { white-space: normal; padding-top: .6rem; }
-    .modal-overlay { padding: 1rem; }
-    .modal-head { flex-wrap: wrap; }
-    .modal-head h2 { flex-basis: 100%; }
-    .grid { grid-template-columns: 1fr; }
-    .check { margin-top: .25rem; }
-  }
+  @media (max-width: 640px) { main { padding: 1rem; } }
 </style>
 </head>
 <body>
@@ -99,9 +88,9 @@
   </header>
   <nav class="tabs">
     <a href="/_admin/dnat" class="{{if eq .Active "dnat"}}active{{end}}">① DNAT</a>
-    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">② Domains</a>
-    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">③ Port forwarding</a>
-    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">④ HTTP service</a>
+    <a href="/_admin" class="{{if eq .Active "http"}}active{{end}}">② HTTP service</a>
+    <a href="/_admin/domains" class="{{if eq .Active "domains"}}active{{end}}">③ Domains</a>
+    <a href="/_admin/forwards" class="{{if eq .Active "forward"}}active{{end}}">④ Port forwarding</a>
   </nav>
   <main>
     {{if .Notice}}<div class="msg notice">{{.Notice}}</div>{{end}}
@@ -109,148 +98,207 @@
 
     <div class="table-head">
       <h2>HTTP service</h2>
-      <button class="btn primary" onclick="openAdd()">+ Add route</button>
+      <button class="btn primary" onclick="openAdd()">+ Add HTTP domain</button>
     </div>
+    <p class="lead">Each domain reverse-proxies path prefixes to internal HTTP backends. inproxy
+       terminates TLS with an automatic Let's Encrypt cert (DNS must point here), routes by
+       <b>(domain, longest path prefix)</b>, and can strip the prefix. A path that matches no route
+       falls back to a Domains whole-site rule for that host. Changes apply immediately.</p>
 
     <table>
       <thead>
-        <tr><th>Public path</th><th>Backend</th><th>Strip prefix</th><th>Concurrency</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+        <tr><th style="width:24%">Domain</th><th style="width:13%">Path</th><th>Target</th><th style="width:24%">Path notes</th><th style="width:130px">Actions</th></tr>
       </thead>
       <tbody>
-        {{range .Routes}}
-        <tr>
-          <td data-label="Public path"><code>/{{.Prefix}}/</code></td>
-          <td data-label="Backend"><code>{{.Target}}</code></td>
-          <td data-label="Strip prefix">{{if .StripPrefix}}yes{{else}}no{{end}}</td>
-          <td data-label="Concurrency">{{if .MaxConcurrent}}{{.MaxConcurrent}}{{else}}∞{{end}}</td>
-          <td data-label="Status">{{if .Enabled}}<span class="badge on">enabled</span>{{else}}<span class="badge off">disabled</span>{{end}}</td>
-          <td data-label="Notes">{{.Description}}</td>
-          <td data-label="Actions" class="actions">
-            <button class="btn"
-               onclick='openDetail({{.Prefix}}, {{.Target}}, {{.StripPrefix}}, {{.Enabled}}, {{.Description}}, {{.MaxConcurrent}})'>Detail</button>
-            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete /{{.Prefix}}/ ?');">
-              <input type="hidden" name="prefix" value="{{.Prefix}}">
+        {{range $i, $s := .Sites}}
+        {{$n := len $s.Routes}}
+        {{if eq $n 0}}
+        <tr{{if gt $i 0}} class="grp"{{end}}>
+          <td><code>{{$s.Host}}</code>{{if $s.Description}}<div class="rnote">{{$s.Description}}</div>{{end}}</td>
+          <td colspan="3" style="color:#64748b">(no paths)</td>
+          <td class="actions">
+            <button class="btn" onclick="openDetail('{{$s.Host}}')">Detail</button>
+            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete domain {{$s.Host}} ?');">
+              <input type="hidden" name="host" value="{{$s.Host}}">
               <button class="btn del" type="submit">Delete</button>
             </form>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="7" class="empty">No routes yet. Use “Add route” to create one.</td></tr>
+        {{range $j, $r := $s.Routes}}
+        <tr{{if and (eq $j 0) (gt $i 0)}} class="grp"{{end}}>
+          {{if eq $j 0}}<td rowspan="{{$n}}"><code>{{$s.Host}}</code>{{if $s.Description}}<div class="rnote">{{$s.Description}}</div>{{end}}</td>{{end}}
+          <td><code>/{{$r.Prefix}}/</code></td>
+          <td><code>{{$r.Target}}</code>{{if not $r.Enabled}} <span class="badge off">disabled</span>{{end}}</td>
+          <td class="rnote">{{$r.Description}}</td>
+          {{if eq $j 0}}<td rowspan="{{$n}}" class="actions">
+            <button class="btn" onclick="openDetail('{{$s.Host}}')">Detail</button>
+            <form method="post" action="/_admin/delete" onsubmit="return confirm('Delete domain {{$s.Host}} ?');">
+              <input type="hidden" name="host" value="{{$s.Host}}">
+              <button class="btn del" type="submit">Delete</button>
+            </form>
+          </td>{{end}}
+        </tr>
+        {{end}}
+        {{end}}
+        {{else}}
+        <tr><td colspan="5" class="empty">No HTTP domains yet. Use “Add HTTP domain”.</td></tr>
         {{end}}
       </tbody>
     </table>
   </main>
 
-  <!-- shared modal layer: add / view / edit a route -->
-  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-overlay" id="modal">
     <div class="modal" id="modal-box" data-mode="add">
       <div class="modal-head">
-        <h2 id="modal-title">Add route</h2>
+        <h2 id="modal-title">Add HTTP domain</h2>
         <div class="modal-actions">
           <button type="button" class="btn act-view" onclick="enterEdit()">Edit</button>
           <button type="button" class="btn del act-view" onclick="submitDelete()">Delete</button>
-          <button type="submit" form="route-form" class="btn primary act-edit">Save</button>
+          <button type="submit" form="site-form" class="btn primary act-edit">Save</button>
           <button type="button" class="btn act-edit" onclick="cancelForm()">Cancel</button>
         </div>
         <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
-        <form method="post" action="/_admin/save" id="route-form">
-          <input type="hidden" name="old_prefix" id="old_prefix" value="">
-          <div class="grid">
-            <div>
-              <label for="prefix">Public path prefix</label>
-              <input type="text" id="prefix" name="prefix" placeholder="serviceA" required>
-              <div class="hint">Reached at https://&lt;host&gt;/serviceA/...</div>
-            </div>
-            <div>
-              <label for="target">Backend address</label>
-              <input type="text" id="target" name="target" placeholder="http://10.8.0.5:8080" required>
-              <div class="hint">Internal service scheme://host:port</div>
-            </div>
-            <div>
-              <label for="max_concurrent">Max concurrency</label>
-              <input type="text" id="max_concurrent" name="max_concurrent" inputmode="numeric" placeholder="0 = unlimited">
-              <div class="hint">Max simultaneous requests forwarded (0 = unlimited)</div>
-            </div>
-            <div class="check">
-              <input type="checkbox" id="strip_prefix" name="strip_prefix" checked>
-              <label for="strip_prefix">Strip prefix when forwarding (/serviceA/api → /api)</label>
-            </div>
-            <div class="full">
-              <label for="description">Notes (optional)</label>
-              <input type="text" id="description" name="description" placeholder="e.g. Finance system">
-            </div>
-            <div class="check">
-              <input type="checkbox" id="enabled" name="enabled" checked>
-              <label for="enabled">Enabled</label>
-            </div>
+        <form method="post" action="/_admin/save" id="site-form">
+          <input type="hidden" name="old_host" id="old_host" value="">
+          <input type="hidden" name="routes_json" id="routes_json" value="">
+          <div>
+            <label for="host">Public domain</label>
+            <input type="text" id="host" name="host" placeholder="tools.aperture-x.com" style="width:100%" required>
+            <div class="hint">Matched by SNI; DNS must point here (inproxy auto-issues a Let's Encrypt cert)</div>
           </div>
+          <div style="margin-top:.8rem">
+            <label for="description">Notes (optional)</label>
+            <input type="text" id="description" name="description" placeholder="e.g. internal tools" style="width:100%">
+          </div>
+
+          <div class="fwd-head">
+            <h3>Path routes</h3>
+            <button type="button" class="btn" id="add-route" onclick="addRow()">+ Add path</button>
+          </div>
+          <table class="rtbl">
+            <thead><tr>
+              <th style="width:15%">Path prefix</th>
+              <th style="width:30%">Backend (http(s)://ip:port)</th>
+              <th class="c" style="width:48px">Strip</th>
+              <th class="c" style="width:56px">Max</th>
+              <th class="c" style="width:40px">On</th>
+              <th style="width:32%">Notes</th>
+              <th style="width:34px"></th>
+            </tr></thead>
+            <tbody id="route-rows"></tbody>
+          </table>
+          <div class="hint">prefix <code>finance</code> → public <code>/finance/…</code>; strip = forward
+             <code>/finance/api</code> as <code>/api</code>. Max = max concurrency (0 = unlimited).</div>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- hidden form used by the Delete action inside the modal -->
   <form method="post" action="/_admin/delete" id="delete-form">
-    <input type="hidden" name="prefix" id="del_prefix">
+    <input type="hidden" name="host" id="del_host">
   </form>
 
   <script>
+    var SITES = {{.SitesJSON}};
     const box = document.getElementById('modal-box');
-    const FIELDS = ['prefix', 'target', 'max_concurrent', 'description', 'strip_prefix', 'enabled'];
-    let current = null; // last viewed route, for restoring on Cancel
+    const rows = document.getElementById('route-rows');
+    let current = null;
 
-    function setEditable(on) {
-      FIELDS.forEach(id => { document.getElementById(id).disabled = !on; });
+    function rowCells() {
+      return '<td><input class="r-prefix" type="text" placeholder="finance"></td>'
+        + '<td><input class="r-target" type="text" placeholder="http://10.8.0.5:8080"></td>'
+        + '<td class="c"><input type="checkbox" class="r-strip"></td>'
+        + '<td><input class="r-maxc" type="text" inputmode="numeric" placeholder="0"></td>'
+        + '<td class="c"><input type="checkbox" class="r-en"></td>'
+        + '<td><input class="r-note" type="text" placeholder="notes" oninput="this.title=this.value"></td>'
+        + '<td class="c"><button type="button" class="btn rm" onclick="this.closest(\'tr\').remove()">✕</button></td>';
     }
-    function fill(r) {
-      document.getElementById('old_prefix').value = r.prefix || '';
-      document.getElementById('prefix').value = r.prefix || '';
-      document.getElementById('target').value = r.target || '';
-      document.getElementById('max_concurrent').value = r.maxConc || 0;
-      document.getElementById('description').value = r.desc || '';
-      document.getElementById('strip_prefix').checked = !!r.strip;
-      document.getElementById('enabled').checked = !!r.enabled;
+    function addRow(rt) {
+      const row = rows.insertRow(); // rows is the <tbody>
+      row.innerHTML = rowCells();
+      rt = rt || {};
+      row.querySelector('.r-prefix').value = rt.prefix || '';
+      row.querySelector('.r-target').value = rt.target || '';
+      row.querySelector('.r-strip').checked = (rt.strip_prefix === undefined) ? true : !!rt.strip_prefix;
+      row.querySelector('.r-maxc').value = rt.max_concurrent || 0;
+      row.querySelector('.r-en').checked = (rt.enabled === undefined) ? true : !!rt.enabled;
+      row.querySelector('.r-note').value = rt.description || '';
+      return row;
+    }
+    function collectRoutes() {
+      const out = [];
+      rows.querySelectorAll('tr').forEach(row => {
+        const mc = parseInt(row.querySelector('.r-maxc').value.trim(), 10);
+        out.push({
+          prefix: row.querySelector('.r-prefix').value.trim().replace(/^\/+|\/+$/g, ''),
+          target: row.querySelector('.r-target').value.trim(),
+          strip_prefix: row.querySelector('.r-strip').checked,
+          max_concurrent: isNaN(mc) ? 0 : mc,
+          enabled: row.querySelector('.r-en').checked,
+          description: row.querySelector('.r-note').value.trim()
+        });
+      });
+      return out;
+    }
+    function setEditable(on) {
+      document.getElementById('host').disabled = !on;
+      document.getElementById('description').disabled = !on;
+      document.getElementById('add-route').style.display = on ? '' : 'none';
+      rows.querySelectorAll('input,button').forEach(e => { e.disabled = !on; });
+    }
+    function fillSite(s) {
+      document.getElementById('old_host').value = s ? s.host : '';
+      document.getElementById('host').value = s ? s.host : '';
+      document.getElementById('description').value = s ? (s.description || '') : '';
+      rows.innerHTML = '';
+      const rs = (s && s.routes) ? s.routes : [];
+      if (rs.length === 0) addRow();
+      else rs.forEach(addRow);
     }
     function showModal() { document.getElementById('modal').classList.add('open'); }
     function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
     function openAdd() {
       current = null;
-      fill({ strip: true, enabled: true, maxConc: 0 });
-      document.getElementById('modal-title').textContent = 'Add route';
+      fillSite(null);
+      document.getElementById('modal-title').textContent = 'Add HTTP domain';
       box.dataset.mode = 'add';
       setEditable(true);
       showModal();
-      document.getElementById('prefix').focus();
+      document.getElementById('host').focus();
     }
-    function openDetail(prefix, target, strip, enabled, desc, maxConc) {
-      current = { prefix, target, strip, enabled, desc, maxConc };
-      fill(current);
-      document.getElementById('modal-title').textContent = 'Route /' + prefix + '/';
+    function openDetail(host) {
+      current = (SITES || []).find(s => s.host === host) || { host: host, routes: [] };
+      fillSite(current);
+      document.getElementById('modal-title').textContent = host;
       box.dataset.mode = 'view';
       setEditable(false);
       showModal();
     }
     function enterEdit() {
-      document.getElementById('modal-title').textContent = 'Edit route /' + current.prefix + '/';
+      document.getElementById('modal-title').textContent = 'Edit ' + current.host;
       box.dataset.mode = 'edit';
       setEditable(true);
     }
     function cancelForm() {
       if (box.dataset.mode === 'add' || !current) { closeModal(); return; }
-      fill(current); // discard edits, back to read-only view
-      document.getElementById('modal-title').textContent = 'Route /' + current.prefix + '/';
+      fillSite(current);
+      document.getElementById('modal-title').textContent = current.host;
       box.dataset.mode = 'view';
       setEditable(false);
     }
     function submitDelete() {
-      if (!current || !confirm('Delete /' + current.prefix + '/ ?')) return;
-      document.getElementById('del_prefix').value = current.prefix;
+      if (!current || !confirm('Delete domain ' + current.host + ' ?')) return;
+      document.getElementById('del_host').value = current.host;
       document.getElementById('delete-form').submit();
     }
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+    document.getElementById('site-form').addEventListener('submit', function() {
+      document.getElementById('routes_json').value = JSON.stringify(collectRoutes());
+    });
+    // modal closes only via the × button — prevents accidental dismissal
   </script>
 </body>
 </html>{{end}}

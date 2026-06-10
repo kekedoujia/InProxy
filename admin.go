@@ -100,11 +100,14 @@ func (ad *Admin) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ad *Admin) dashboard(w http.ResponseWriter, r *http.Request) {
+	sites := ad.store.ListSites()
+	js, _ := json.Marshal(sites)
 	ad.render(w, "dashboard.html", map[string]any{
-		"Active": "http",
-		"Routes": ad.store.List(),
-		"Notice": r.URL.Query().Get("notice"),
-		"Error":  r.URL.Query().Get("error"),
+		"Active":    "http",
+		"Sites":     sites,
+		"SitesJSON": template.JS(js),
+		"Notice":    r.URL.Query().Get("notice"),
+		"Error":     r.URL.Query().Get("error"),
 	})
 }
 
@@ -113,29 +116,24 @@ func (ad *Admin) save(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/_admin", http.StatusSeeOther)
 		return
 	}
-	maxConc := 0
-	if v := strings.TrimSpace(r.FormValue("max_concurrent")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			ad.redirectMsg(w, r, "error", "max concurrency must be a non-negative integer (0 = unlimited)")
+	var routes []Route
+	if s := strings.TrimSpace(r.FormValue("routes_json")); s != "" {
+		if err := json.Unmarshal([]byte(s), &routes); err != nil {
+			ad.redirectMsg(w, r, "error", "could not read routes: "+err.Error())
 			return
 		}
-		maxConc = n
 	}
-	route := Route{
-		Prefix:        strings.Trim(strings.TrimSpace(r.FormValue("prefix")), "/"),
-		Target:        strings.TrimSpace(r.FormValue("target")),
-		StripPrefix:   r.FormValue("strip_prefix") == "on",
-		Description:   strings.TrimSpace(r.FormValue("description")),
-		Enabled:       r.FormValue("enabled") == "on",
-		MaxConcurrent: maxConc,
+	site := HTTPSite{
+		Host:        strings.TrimSpace(r.FormValue("host")),
+		Description: strings.TrimSpace(r.FormValue("description")),
+		Routes:      routes,
 	}
-	oldPrefix := strings.TrimSpace(r.FormValue("old_prefix"))
-	if err := ad.store.Upsert(oldPrefix, route); err != nil {
+	oldHost := strings.TrimSpace(r.FormValue("old_host"))
+	if err := ad.store.UpsertSite(oldHost, site); err != nil {
 		ad.redirectMsg(w, r, "error", err.Error())
 		return
 	}
-	ad.redirectMsg(w, r, "notice", "Saved route /"+route.Prefix)
+	ad.redirectMsg(w, r, "notice", "Saved "+site.Host+" (certificate is obtained on first HTTPS request)")
 }
 
 func (ad *Admin) delete(w http.ResponseWriter, r *http.Request) {
@@ -143,12 +141,12 @@ func (ad *Admin) delete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/_admin", http.StatusSeeOther)
 		return
 	}
-	prefix := strings.TrimSpace(r.FormValue("prefix"))
-	if err := ad.store.Delete(prefix); err != nil {
+	host := strings.TrimSpace(r.FormValue("host"))
+	if err := ad.store.DeleteSite(host); err != nil {
 		ad.redirectMsg(w, r, "error", err.Error())
 		return
 	}
-	ad.redirectMsg(w, r, "notice", "Deleted route /"+prefix)
+	ad.redirectMsg(w, r, "notice", "Deleted "+host)
 }
 
 func (ad *Admin) domains(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +315,7 @@ func (ad *Admin) saveForward(w http.ResponseWriter, r *http.Request) {
 		Proto:       strings.TrimSpace(r.FormValue("proto")),
 		Listen:      strings.TrimSpace(r.FormValue("listen")),
 		Target:      strings.TrimSpace(r.FormValue("target")),
+		ProxyProto:  r.FormValue("proxy_proto") == "on",
 		Description: strings.TrimSpace(r.FormValue("description")),
 		Enabled:     r.FormValue("enabled") == "on",
 	}
